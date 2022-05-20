@@ -69,6 +69,8 @@ suspend fun main() {
     overrideConf.forEach { (k, v) -> conf.put(k, v) }
   }
 
+  convertDeprecatedDurations(conf)
+
   configureLogging(conf)
 
   val log = LoggerFactory.getLogger(Main::class.java)
@@ -266,6 +268,32 @@ private fun overwriteWithEnvironmentVariables(conf: JsonObject,
       conf.put(name, newVal)
     }
   }
+}
+
+/**
+ * In Steep 5 we used many config names that included the unit (example
+ * `lookupIntervalMilliseconds: 2000`). This changed in Steep 6 to human-readable
+ * durations (example `lookupInterval: 2s`). This function looks for old
+ * config names containing a unit and converts them to the new format.
+ */
+private fun convertDeprecatedDurations(conf: JsonObject) {
+
+  val configNameToDurationUnit = listOf("Milliseconds" to "ms", "Seconds" to "s", "Minutes" to "m")
+  val confOverwrite = JsonObject()
+
+  conf.fieldNames().forEach { fieldName ->
+    configNameToDurationUnit.forEach { durationMapping ->
+      if(fieldName.endsWith(durationMapping.first)) {
+        val newName = fieldName.removeSuffix(durationMapping.first)
+        // Only set the field if it is not already defined by the user.
+        if (!conf.containsKey(newName)) {
+          confOverwrite.put(newName, conf.getString(fieldName) + durationMapping.second)
+        }
+      }
+    }
+  }
+
+  conf.mergeIn(confOverwrite)
 }
 
 /**
