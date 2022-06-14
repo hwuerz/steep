@@ -5,7 +5,7 @@ import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 plugins {
     application
     jacoco
-    kotlin("jvm") version "1.6.21"
+    kotlin("jvm") version "1.7.0"
 }
 
 buildscript {
@@ -52,9 +52,9 @@ dependencies {
 
     implementation("commons-codec:commons-codec:1.15")
     implementation("commons-io:commons-io:2.11.0")
-    implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.13.2")
-    implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.13.2")
-    implementation("com.github.luben:zstd-jni:1.5.2-2")
+    implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.13.3")
+    implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.13.3")
+    implementation("com.github.luben:zstd-jni:1.5.2-3")
     implementation("com.github.zafarkhaja:java-semver:0.9.0")
     implementation("com.google.guava:guava:31.1-jre")
     implementation("com.zaxxer:HikariCP:5.0.1")
@@ -66,10 +66,11 @@ dependencies {
     implementation("org.apache.ant:ant:1.10.12")
     implementation("org.apache.commons:commons-lang3:3.12.0")
     implementation("org.apache.commons:commons-text:1.9")
-    implementation("org.flywaydb:flyway-core:8.5.10")
+    implementation("org.flywaydb:flyway-core:8.5.12")
     implementation("org.mongodb:mongodb-driver-reactivestreams:4.6.0")
     implementation("com.github.openstack4j.core:openstack4j:3.10")
-    implementation("org.postgresql:postgresql:42.3.5")
+    implementation("org.parboiled:parboiled-java:1.4.1")
+    implementation("org.postgresql:postgresql:42.3.6")
     implementation("org.quartz-scheduler:quartz:2.3.2") {
         // we only need org.quartz.CronExpression, so we can exclude all dependencies
         isTransitive = false
@@ -82,10 +83,10 @@ dependencies {
     implementation(kotlin("stdlib-jdk8"))
     implementation(kotlin("script-runtime"))
 
-    testImplementation("de.flapdoodle.embed:de.flapdoodle.embed.mongo:3.4.5")
+    testImplementation("de.flapdoodle.embed:de.flapdoodle.embed.mongo:3.4.6")
     testImplementation("io.mockk:mockk:1.12.4")
     testImplementation("io.vertx:vertx-junit5:$vertxVersion")
-    testImplementation("org.assertj:assertj-core:3.22.0")
+    testImplementation("org.assertj:assertj-core:3.23.1")
     testImplementation("org.junit.jupiter:junit-jupiter-api:$junitVersion")
     testImplementation("org.junit.jupiter:junit-jupiter-engine:$junitVersion")
     testImplementation("org.junit.jupiter:junit-jupiter-params:$junitVersion")
