@@ -312,6 +312,15 @@ class ProcessChainGeneratorTest {
         // Test if `dependsOn` works correctly with nested for-each actions
         T("dependsOnForEachNested"),
 
+        // Test if a depends on after a for loop is only executed when all
+        // loop iterations are finished. Especially those that are generated
+        // from a yield to input
+        T("dependsOnForEachYieldToInput"),
+
+        // Same as `dependsOnForEachYieldToInput` but with an output additional
+        // output of the for-each action that is used by the subsequent action
+        T("dependsOnForEachYieldToInputWithOutput"),
+
         // Test if a nested for-each action can depend on an execute action
         T("dependsOnByForEachNested"),
 

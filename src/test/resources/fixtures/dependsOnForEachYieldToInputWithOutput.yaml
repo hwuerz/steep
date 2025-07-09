@@ -1,0 +1,37 @@
+vars:
+  - id: files
+    value:
+      - test1.txt
+#  - id: finalInput
+#    value: /dummy.txt
+actions:
+  - type: for
+    id: myLoop
+    input: files
+    output: for_out
+    enumerator: i
+    actions:
+      - id: cpInternal
+        type: execute
+        service: cp
+        inputs:
+          - id: input_file
+            var: i
+        outputs:
+          - id: output_file
+            var: o
+    yieldToInput: o
+    yieldToOutput: o
+  - id: joinFinal
+    type: execute
+    dependsOn:
+      - myLoop
+    service: join
+    inputs:
+#      - id: i
+#        var: finalInput
+      - id: i
+        var: for_out
+    outputs:
+      - id: o
+        var: finalOutput
