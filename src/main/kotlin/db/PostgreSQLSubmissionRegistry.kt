@@ -3,6 +3,7 @@ package db
 import com.fasterxml.jackson.module.kotlin.convertValue
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.google.common.cache.CacheBuilder
+import db.SubmissionRegistry.ContinuationStatus
 import db.SubmissionRegistry.ProcessChainStatus
 import helper.JsonUtils
 import helper.UniqueID
@@ -13,8 +14,10 @@ import io.vertx.kotlin.core.json.jsonArrayOf
 import io.vertx.kotlin.core.json.jsonObjectOf
 import io.vertx.kotlin.coroutines.coAwait
 import io.vertx.sqlclient.Row
+import io.vertx.sqlclient.SqlConnection
 import io.vertx.sqlclient.Tuple
 import model.Submission
+import model.continuation.Continuation
 import model.processchain.ProcessChain
 import model.processchain.Run
 import search.DateTerm
@@ -49,7 +52,9 @@ class PostgreSQLSubmissionRegistry(private val vertx: Vertx, url: String,
      */
     private const val SUBMISSIONS = "submissions"
     private const val PROCESS_CHAINS = "processchains"
+    private const val CONTINUATIONS = "continuations"
     private const val SUBMISSION_ID = "submissionId"
+    private const val SUSPEND_ACTION_ID = "suspendActionId"
     private const val START_TIME = "startTime"
     private const val END_TIME = "endTime"
     private const val STATUS = "status"
@@ -72,6 +77,15 @@ class PostgreSQLSubmissionRegistry(private val vertx: Vertx, url: String,
    * attribute that never changes
    */
   private val processChainSubmissionIds = CacheBuilder.newBuilder()
+      .expireAfterAccess(60, TimeUnit.SECONDS)
+      .maximumSize(10000)
+      .build<String, String>()
+
+  /**
+   * A small cache that reduces the number of database requests for an
+   * attribute that never changes
+   */
+  private val continuationSubmissionIds = CacheBuilder.newBuilder()
       .expireAfterAccess(60, TimeUnit.SECONDS)
       .maximumSize(10000)
       .build<String, String>()
@@ -296,15 +310,23 @@ class PostgreSQLSubmissionRegistry(private val vertx: Vertx, url: String,
     }
   }
 
+  /**
+   * Ensures that a submission with the given ID exists
+   * @throws NoSuchElementException if there is no such submission
+   */
+  private suspend fun SqlConnection.ensureSubmissionExists(submissionId: String) {
+    val existsStatement = "SELECT 1 FROM $SUBMISSIONS WHERE $ID=$1"
+    val existsParam = Tuple.of(submissionId)
+    if (this.preparedQuery(existsStatement).execute(existsParam).coAwait()
+        ?.firstOrNull() == null) {
+      throw NoSuchElementException("There is no submission with ID `$submissionId'")
+    }
+  }
+
   override suspend fun addProcessChains(processChains: Collection<ProcessChain>,
       submissionId: String, status: ProcessChainStatus) {
     withConnection { connection ->
-      val existsStatement = "SELECT 1 FROM $SUBMISSIONS WHERE $ID=$1"
-      val existsParam = Tuple.of(submissionId)
-      if (connection.preparedQuery(existsStatement).execute(existsParam).coAwait()
-          ?.firstOrNull() == null) {
-        throw NoSuchElementException("There is no submission with ID `$submissionId'")
-      }
+      connection.ensureSubmissionExists(submissionId)
 
       val insertStatement = "INSERT INTO $PROCESS_CHAINS ($ID, $SUBMISSION_ID, $STATUS, $DATA) " +
           "VALUES ($1, $2, $3, $4)"
@@ -696,6 +718,158 @@ class PostgreSQLSubmissionRegistry(private val vertx: Vertx, url: String,
       status to results
     })
   }
+
+  override suspend fun addContinuations(continuations: Collection<Continuation>,
+    submissionId: String, status: ContinuationStatus) {
+    withConnection { connection ->
+      connection.ensureSubmissionExists(submissionId)
+
+      val insertStatement = "INSERT INTO $CONTINUATIONS ($ID, $SUSPEND_ACTION_ID, $SUBMISSION_ID, $STATUS, $DATA) " +
+          "VALUES ($1, $2, $3, $4, $5)"
+      val insertParams = continuations.map {
+        val obj = JsonUtils.toJson(it)
+        Tuple.of(it.id, it.suspendActionId, submissionId, status.toString(), obj)
+      }
+      connection.preparedQuery(insertStatement).executeBatch(insertParams).coAwait()
+    }
+  }
+
+  override suspend fun findContinuations(
+    submissionId: String?,
+    status: ContinuationStatus?,
+    size: Int,
+    offset: Int,
+    order: Int
+  ): Collection<Pair<Continuation, String>> {
+    val asc = if (order >= 0) "ASC" else "DESC"
+    val limit = if (size < 0) "ALL" else size.toString()
+
+    val statement = StringBuilder()
+    statement.append("SELECT $DATA::varchar, $SUBMISSION_ID FROM $CONTINUATIONS ")
+
+    val params = if (submissionId != null && status != null) {
+      statement.append("WHERE $SUBMISSION_ID=$1 AND $STATUS=$2 ")
+      Tuple.of(submissionId, status.toString())
+    } else if (submissionId != null) {
+      statement.append("WHERE $SUBMISSION_ID=$1 ")
+      Tuple.of(submissionId)
+    } else if (status != null) {
+      statement.append("WHERE $STATUS=$1 ")
+      Tuple.of(status.toString())
+    } else {
+      null
+    }
+    statement.append("ORDER BY $SERIAL $asc LIMIT $limit OFFSET $offset")
+
+    val rs = if (params != null) {
+      client.preparedQuery(statement.toString()).execute(params).coAwait()
+    } else {
+      client.query(statement.toString()).execute().coAwait()
+    }
+
+    return rs.map { Pair(JsonUtils.mapper.readValue(it.getString(0)), it.getString(1)) }
+  }
+
+  override suspend fun findContinuationById(continuationId: String): Continuation? {
+    val statement = "SELECT $DATA::varchar FROM $CONTINUATIONS WHERE $ID=$1"
+    val params = Tuple.of(continuationId)
+    val rs = client.preparedQuery(statement).execute(params).coAwait()
+    return rs?.firstOrNull()?.let { JsonUtils.mapper.readValue(it.getString(0)) }
+  }
+
+  override suspend fun countContinuations(
+    submissionId: String?,
+    status: ContinuationStatus?
+  ): Long {
+    val statement = StringBuilder()
+    statement.append("SELECT COUNT(*) FROM $CONTINUATIONS")
+
+    val params = Tuple.tuple()
+    if (submissionId != null) {
+      statement.append(" WHERE $SUBMISSION_ID=$1")
+      params.addString(submissionId)
+    }
+    if (status != null) {
+      if (params.size() == 0) {
+        statement.append(" WHERE ")
+      } else {
+        statement.append(" AND ")
+      }
+      statement.append("$STATUS=$${params.size() + 1}")
+      params.addString(status.toString())
+    }
+
+    val rs = client.preparedQuery(statement.toString()).execute(params).coAwait()
+    return rs?.firstOrNull()?.getLong(0) ?: 0L
+  }
+
+  override suspend fun getContinuationSubmissionId(continuationId: String): String {
+    return continuationSubmissionIds.getIfPresent(continuationId) ?: run {
+      val sid = getContinuationColumn(continuationId, SUBMISSION_ID) { it.getString(0) }
+      continuationSubmissionIds.put(continuationId, sid)
+      sid
+    }
+  }
+
+  private suspend fun <T> getContinuationColumn(continuationId: String,
+                                                column: String, block: (Row) -> T): T {
+    val statement = "SELECT $column FROM $CONTINUATIONS WHERE $ID=$1"
+    val params = Tuple.of(continuationId)
+    val r = client.preparedQuery(statement).execute(params).coAwait().firstOrNull()
+      ?: throw NoSuchElementException("There is no continuation with ID `$continuationId'")
+    return block(r)
+  }
+
+  override suspend fun getContinuationStatus(continuationId: String): ContinuationStatus =
+    getContinuationColumn(continuationId, STATUS) { r ->
+      r.getString(0).let { ContinuationStatus.valueOf(it) } }
+
+  override suspend fun setContinuationStatus(
+    continuationId: String,
+    status: ContinuationStatus
+  ) {
+    updateColumn(CONTINUATIONS, continuationId, STATUS, status.toString())
+  }
+
+  override suspend fun setAllContinuationsStatus(
+    submissionId: String,
+    currentStatus: ContinuationStatus,
+    newStatus: ContinuationStatus
+  ) {
+    val updateStatement = "UPDATE $CONTINUATIONS SET $STATUS=$1 WHERE " +
+        "$SUBMISSION_ID=$2 AND $STATUS=$3"
+    val updateParams = Tuple.of(newStatus.toString(), submissionId, currentStatus.toString())
+    client.preparedQuery(updateStatement).execute(updateParams).coAwait()
+  }
+
+  override suspend fun getContinuationResults(continuationId: String): Map<String, List<Any>>? =
+    getContinuationColumn(continuationId, "$RESULTS::varchar") { r ->
+      r.getString(0)?.let { JsonUtils.mapper.readValue(it) } }
+
+  override suspend fun setContinuationResults(
+    continuationId: String,
+    results: Map<String, List<Any>>?
+  ) {
+
+    // TODO Ensure that only results
+    updateColumn(CONTINUATIONS, continuationId, RESULTS, results?.let { JsonUtils.toJson(it) })
+  }
+
+  override suspend fun getContinuationStatusAndResultsIfFinished(continuationIds: Collection<String>): Map<String, Pair<ContinuationStatus, Map<String, List<Any>>?>> {
+    val statement = "SELECT $ID, $STATUS, $RESULTS::varchar FROM $CONTINUATIONS " +
+        "WHERE $STATUS!=$1 AND $ID=ANY($2)"
+    val params = Tuple.of(
+      ContinuationStatus.REGISTERED,
+      continuationIds.toTypedArray()
+    )
+    val rs = client.preparedQuery(statement).execute(params).coAwait()
+    return rs.associateBy({ it.getString(0) }, { row ->
+      val status = ContinuationStatus.valueOf(row.getString(1))
+      val results = row.getString(2)?.let { JsonUtils.mapper.readValue<Map<String, List<Any>>>(it) }
+      status to results
+    })
+  }
+
 
   /**
    * Escape a string so it can be used in a LIKE expression

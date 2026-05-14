@@ -280,6 +280,16 @@ class HttpEndpoint : CoroutineVerticle() {
         .produces("application/json")
         .handler(this::onPutProcessChainById)
 
+    router.get("/continuations")
+      .produces("application/json")
+      .produces("text/html")
+      .handler(this::onGetContinuations)
+
+    router.put("/continuations/:id/?")
+      .handler(bodyHandler)
+      .produces("application/json")
+      .handler(this::onPutContinuationById)
+
     router.get("/vms")
         .produces("application/json")
         .produces("text/html")
@@ -1393,6 +1403,9 @@ class HttpEndpoint : CoroutineVerticle() {
           submissionRegistry.setAllProcessChainsStatus(id,
               SubmissionRegistry.ProcessChainStatus.PAUSED,
               SubmissionRegistry.ProcessChainStatus.CANCELLED)
+          submissionRegistry.setAllContinuationsStatus(id,
+              SubmissionRegistry.ContinuationStatus.REGISTERED,
+              SubmissionRegistry.ContinuationStatus.CANCELLED)
 
           // now cancel running process chains
           val pcIds = submissionRegistry.findProcessChainIdsBySubmissionIdAndStatus(
@@ -1901,6 +1914,176 @@ class HttpEndpoint : CoroutineVerticle() {
         ctx.response()
             .putHeader("content-type", "application/json")
             .end(json.encode())
+      }
+    }
+  }
+
+  /**
+   * Get list of process chains
+   * @param ctx the routing context
+   */
+  private fun onGetContinuations(ctx: RoutingContext) {
+    if (prefersHtml(ctx) && false) {
+      TODO("Implement a separate UI for continuations")
+//      renderAsset("ui/continuations/index.html", ctx.response())
+    } else {
+      launch {
+        val offset = max(0, ctx.request().getParam("offset")?.toIntOrNull() ?: 0)
+        val size = ctx.request().getParam("size")?.toIntOrNull() ?: 10
+
+        val submissionId: String? = ctx.request().getParam("submissionId")
+
+        val status = ctx.request().getParam("status")?.let {
+          try {
+            SubmissionRegistry.ContinuationStatus.valueOf(it)
+          } catch (_: IllegalArgumentException) {
+            renderError(ctx, 400, "Invalid status: $it")
+            return@launch
+          }
+        }
+
+        val list = submissionRegistry.findContinuations(submissionId = submissionId,
+          status = status, size = size, offset = offset, order = -1
+        ).map { p ->
+          JsonUtils.toJson(p.first).also {
+            it.put("submissionId", p.second)
+            it.put("status", submissionRegistry.getContinuationStatus(p.first.id))
+            it.put("results", submissionRegistry.getContinuationResults(p.first.id))
+          }
+        }
+
+        val total = submissionRegistry.countContinuations(submissionId, status)
+        val encodedJson = JsonArray(list).encode()
+
+        ctx.response()
+          .putHeader("content-type", "application/json")
+          .putHeader("x-page-size", size.toString())
+          .putHeader("x-page-offset", offset.toString())
+          .putHeader("x-page-total", total.toString())
+          .end(encodedJson)
+      }
+    }
+  }
+
+  /**
+   * Update a single continuation by ID
+   * @param ctx the routing context
+   */
+  private fun onPutContinuationById(ctx: RoutingContext) {
+    val id = ctx.pathParam("id")
+    if (id == null) {
+      renderError(ctx, 400, "Missing continuation ID")
+      return
+    }
+
+    val update = try {
+      ctx.body().asJsonObject()
+    } catch (e: Exception) {
+      renderError(ctx, 400, "Invalid request body: " + e.message)
+      return
+    }
+
+    if (update == null) {
+      renderError(ctx, 400, "Missing request body")
+      return
+    }
+
+    val results: Map<String, List<Any>>? = try {
+      update.getJsonObject("results")?.map { entry ->
+        val variableName = entry.key
+        val variableValue = try {
+          (entry.value as JsonArray).toList()
+        } catch (_: ClassCastException) {
+          renderError(ctx, 400, "`results' property must be a map of variable " +
+              "names to a list of values. $variableName has an invalid value ${entry.value}")
+          return
+        }
+        variableName to variableValue
+      }?.toMap()
+    } catch (_: ClassCastException) {
+      renderError(ctx, 400, "`results' property must be a map of variable names to a list of values")
+      return
+    }
+
+    val strStatus: String? = try {
+      update.getString("status")
+    } catch (_: ClassCastException) {
+      renderError(ctx, 400, "`status' property must be a string")
+      return
+    }
+
+    if (strStatus == null && results == null) {
+      renderError(ctx, 400, "Missing properties. At least one of `status' " +
+          "and `results' required")
+      return
+    }
+
+    val status = strStatus?.let {
+      try {
+        SubmissionRegistry.ContinuationStatus.valueOf(strStatus)
+      } catch (_: IllegalArgumentException) {
+        renderError(ctx, 400, "Invalid `status' property $strStatus Must be one of " +
+            SubmissionRegistry.ContinuationStatus.entries.joinToString(", ") { it.toString() })
+        return
+      }
+    }
+
+    launch {
+      val continuation = submissionRegistry.findContinuationById(id)
+      if (continuation == null) {
+        renderError(ctx, 404, "There is no continuation with ID `$id'")
+      } else {
+
+        val currentStatus = submissionRegistry.getContinuationStatus(id)
+        if (results != null && currentStatus != SubmissionRegistry.ContinuationStatus.REGISTERED) {
+          // 422 Unprocessable Entity
+          renderError(ctx, 422, "Cannot change results of a finished continuation. Current status: $currentStatus")
+          return@launch
+        }
+        if (status != null && currentStatus != SubmissionRegistry.ContinuationStatus.REGISTERED) {
+          // 422 Unprocessable Entity
+          renderError(ctx, 422, "Cannot change status of a finished continuation. Current status: $currentStatus")
+          return@launch
+        }
+
+        // Update results first to prevent workflow execution to continue already now if
+        // results and status gets changed.
+        if (results != null) {
+          // Ensure that only requested outputs can be set as results
+          for (result in results) {
+            if (continuation.outputs.none { it.id == result.key }) {
+              renderError(ctx, 422, "Invalid result variable `${result.key}'. " +
+                  "This continuation does not have an output with this name.")
+              return@launch
+            }
+          }
+
+          // Ensure that all requested outputs are set
+          if (continuation.outputs.any { it.id !in results }) {
+            renderError(ctx, 422, "Missing result variables " +
+                continuation.outputs.filter { it.id !in results }.joinToString(",") { "`${it.id}'" } +
+                ". All outputs of the continuation must be set as results.")
+            return@launch
+          }
+
+          submissionRegistry.setContinuationResults(id, results)
+        }
+
+        if (status != null) {
+          submissionRegistry.setContinuationStatus(id, status)
+        }
+
+        val updatedContinuation = submissionRegistry.findContinuationById(id)!!
+        val submissionId = submissionRegistry.getContinuationSubmissionId(id)
+        val json = JsonUtils.toJson(updatedContinuation).also {
+          it.put("submissionId", submissionId)
+          it.put("status", submissionRegistry.getContinuationStatus(id))
+          it.put("results", submissionRegistry.getContinuationResults(id))
+        }
+
+        ctx.response()
+          .putHeader("content-type", "application/json")
+          .end(json.encode())
       }
     }
   }

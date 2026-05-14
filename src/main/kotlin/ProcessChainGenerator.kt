@@ -4,6 +4,8 @@ import helper.JsonUtils
 import helper.MacroPreprocessor
 import helper.UniqueID
 import io.vertx.core.json.JsonObject
+import model.continuation.Continuation
+import model.continuation.ContinuationParameter
 import model.macro.Macro
 import model.metadata.RuntimeArgument
 import model.metadata.Service
@@ -22,6 +24,7 @@ import model.workflow.ForEachAction
 import model.workflow.GenericParameter
 import model.workflow.IncludeAction
 import model.workflow.OutputParameter
+import model.workflow.SuspendAction
 import model.workflow.Variable
 import model.workflow.Workflow
 import org.apache.commons.io.FilenameUtils
@@ -392,6 +395,32 @@ class ProcessChainGenerator(workflow: Workflow, private val tmpPath: String,
             "processed by the MacroPreprocessor. If you see this error, " +
             "you've found a bug. Please contact the developers.")
       }
+
+      is SuspendAction -> {
+        if (firstPass) {
+          action.copy(
+            id = unrollId(action.id, substitutions, iteration),
+            outputs = action.outputs.map {
+              it.copy(variable = unrollVariable(it.variable, substitutions, iteration))
+            }
+          )
+        } else {
+          action.copy(
+            inputs = action.inputs.map { input ->
+              when (input) {
+                is GenericParameter ->
+                  input.copy(variable = substitutions[input.variable.id] ?: input.variable)
+                is AnonymousParameter ->
+                  input
+              }
+            },
+            dependsOn = action.dependsOn.map {
+              substitutions[it]?.id ?: it
+            }
+          )
+        }
+      }
+      
     }
   }
 
@@ -816,6 +845,45 @@ class ProcessChainGenerator(workflow: Workflow, private val tmpPath: String,
             type = INPUT,
             dataType = it.dataType)
       }
+
+  /**
+   * Create the next list of open Continuations. It is based on all SuspendActions
+   * that are ready to be answered (i.e. whose inputs are all available). The used
+   * SuspendActions will be removed from [actions] to avoid generating them again.
+   */
+  fun getContinuations(): List<Continuation> {
+    val continuations = actions
+      .filterIsInstance<SuspendAction>()
+      // check if action is ready:
+      // (a) check if all actions that this action depends on have already
+      // been executed
+      // (b) check if all inputs are set
+      .filter { it.dependsOn.all { target -> executedActionIds.contains(target) } }
+      .filter { action -> action.inputs.all { it.variable.value != null ||
+          it.variable.id in variableValues } }
+      .map { actionToContinuation(it) }
+    actions.removeAll { it is SuspendAction && continuations.any { c -> c.suspendActionId == it.id } }
+    return continuations
+  }
+
+  /**
+   * Converts a [SuspendAction] to a [Continuation].
+   * @param action the [SuspendAction] to convert
+   * @return the created [Continuation]
+   */
+  private fun actionToContinuation(action: SuspendAction): Continuation {
+    val inputParameters = action.inputs.map { inputParameter ->
+      val value = inputParameter.variable.value ?:
+      variableValues[inputParameter.variable.id] ?:
+      throw IllegalStateException("Parameter `${inputParameter.id}' does not have a value")
+      ContinuationParameter(inputParameter.id, value, INPUT)
+    }
+    val outputParameters = action.outputs.map { outputParameter ->
+      ContinuationParameter(outputParameter.variable.id, null, OUTPUT)
+    }
+
+    return Continuation(idGenerator.next(), action.id, inputParameters, outputParameters)
+  }
 
   /**
    * A helper class that is used to persist the generator's state in [persistState]

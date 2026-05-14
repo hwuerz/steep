@@ -11,6 +11,7 @@ import io.vertx.core.shareddata.AsyncMap
 import io.vertx.kotlin.coroutines.awaitResult
 import io.vertx.kotlin.coroutines.coAwait
 import model.Submission
+import model.continuation.Continuation
 import model.processchain.ProcessChain
 import model.processchain.Run
 import search.Locator
@@ -46,6 +47,11 @@ class InMemorySubmissionRegistry(private val vertx: Vertx) : SubmissionRegistry 
     private const val ASYNC_MAP_EXECUTION_STATE = "InMemorySubmissionRegistry.ExecutionStates"
 
     /**
+     * Name of a cluster-wide map keeping [Continuation]s
+     */
+    private const val ASYNC_MAP_CONTINUATIONS = "InMemorySubmissionRegistry.Continuations"
+
+    /**
      * Name of a cluster-wide lock used to make atomic operations on the
      * cluster-wide map of submissions
      */
@@ -56,6 +62,12 @@ class InMemorySubmissionRegistry(private val vertx: Vertx) : SubmissionRegistry 
      * cluster-wide map of process chains
      */
     private const val LOCK_PROCESS_CHAINS = "InMemorySubmissionRegistry.ProcessChains.Lock"
+
+    /**
+     * Name of a cluster-wide lock used to make atomic operations on the
+     * cluster-wide map of continuations
+     */
+    private const val LOCK_CONTINUATIONS = "InMemorySubmissionRegistry.Continuations.Lock"
   }
 
   private data class ProcessChainEntry(
@@ -74,6 +86,14 @@ class InMemorySubmissionRegistry(private val vertx: Vertx) : SubmissionRegistry 
       val errorMessage: String? = null
   )
 
+  private data class ContinuationEntry(
+      val serial: Int,
+      val continuation: Continuation,
+      val submissionId: String,
+      val status: SubmissionRegistry.ContinuationStatus,
+      val results: Map<String, List<Any>>? = null
+  )
+
   private data class InternalSearchResult(
       val serial: Int,
       val result: SearchResult,
@@ -82,22 +102,27 @@ class InMemorySubmissionRegistry(private val vertx: Vertx) : SubmissionRegistry 
 
   private val processChainEntryID = AtomicInteger()
   private val submissionEntryID = AtomicInteger()
+  private val continuationEntryID = AtomicInteger()
 
   private val submissions: Future<AsyncMap<String, String>>
   private val processChains: Future<AsyncMap<String, String>>
   private val executionStates: Future<AsyncMap<String, String>>
+  private val continuations: Future<AsyncMap<String, String>>
 
   init {
     val sharedData = vertx.sharedData()
     val submissionsPromise = Promise.promise<AsyncMap<String, String>>()
     val processChainsPromise = Promise.promise<AsyncMap<String, String>>()
     val executionStatesPromise = Promise.promise<AsyncMap<String, String>>()
+    val continuationsPromise = Promise.promise<AsyncMap<String, String>>()
     sharedData.getAsyncMap(ASYNC_MAP_SUBMISSIONS, submissionsPromise)
     sharedData.getAsyncMap(ASYNC_MAP_PROCESS_CHAINS, processChainsPromise)
     sharedData.getAsyncMap(ASYNC_MAP_EXECUTION_STATE, executionStatesPromise)
+    sharedData.getAsyncMap(ASYNC_MAP_CONTINUATIONS, continuationsPromise)
     submissions = submissionsPromise.future()
     processChains = processChainsPromise.future()
     executionStates = executionStatesPromise.future()
+    continuations = continuationsPromise.future()
   }
 
   override suspend fun close() {
@@ -687,6 +712,162 @@ class InMemorySubmissionRegistry(private val vertx: Vertx) : SubmissionRegistry 
         }
         .associateBy({ it.processChain.id }, { it.status to it.results })
   }
+
+  private suspend fun findContinuationEntries(): List<ContinuationEntry> {
+    val map = continuations.coAwait()
+    val values = awaitResult<List<String>> { map.values(it) }
+    return values.map { JsonUtils.readValue<ContinuationEntry>(it) }
+      .sortedBy { it.serial }
+  }
+
+  private suspend fun getContinuationEntryById(continuationId: String): ContinuationEntry {
+    val map = continuations.coAwait()
+    val str = map.get(continuationId).coAwait() ?: throw NoSuchElementException(
+        "There is no continuation with ID `$continuationId'")
+    return JsonUtils.readValue(str)
+  }
+
+  private suspend fun updateContinuation(continuationId: String,
+      updater: (ContinuationEntry) -> ContinuationEntry) {
+    val sharedData = vertx.sharedData()
+    val lock = sharedData.getLock(LOCK_CONTINUATIONS).coAwait()
+    try {
+      val map = continuations.coAwait()
+      map.get(continuationId).coAwait()?.let {
+        val entry = JsonUtils.readValue<ContinuationEntry>(it)
+        val newEntry = updater(entry)
+        map.put(continuationId, JsonUtils.writeValueAsString(newEntry)).coAwait()
+      }
+    } finally {
+      lock.release()
+    }
+  }
+
+  override suspend fun addContinuations(
+    continuations: Collection<Continuation>,
+    submissionId: String,
+    status: SubmissionRegistry.ContinuationStatus
+  ) {
+    val sharedData = vertx.sharedData()
+    val submissionLock = sharedData.getLock(LOCK_SUBMISSIONS).coAwait()
+    try {
+      val continuationLock = sharedData.getLock(LOCK_CONTINUATIONS).coAwait()
+      try {
+        if (submissions.coAwait().get(submissionId).coAwait() == null) {
+          throw NoSuchElementException("There is no submission with ID `$submissionId'")
+        }
+        val registeredContinuations = this.continuations.coAwait()
+        for (continuation in continuations) {
+          val e = ContinuationEntry(
+              continuationEntryID.getAndIncrement(),
+              continuation,
+              submissionId,
+              status
+          )
+          registeredContinuations.put(continuation.id, JsonUtils.writeValueAsString(e)).coAwait()
+        }
+      } finally {
+        continuationLock.release()
+      }
+    } finally {
+      submissionLock.release()
+    }
+  }
+
+  override suspend fun findContinuations(
+    submissionId: String?,
+    status: SubmissionRegistry.ContinuationStatus?,
+    size: Int,
+    offset: Int,
+    order: Int
+  ): Collection<Pair<Continuation, String>> {
+    return findContinuationEntries()
+        .filter {
+          (submissionId == null || it.submissionId == submissionId) &&
+              (status == null || it.status == status)
+        }
+        .let { if (order < 0) it.reversed() else it }
+        .drop(offset)
+        .let { if (size >= 0) it.take(size) else it }
+        .map { Pair(it.continuation, it.submissionId) }
+  }
+
+  override suspend fun findContinuationById(continuationId: String): Continuation? {
+    return continuations.coAwait().get(continuationId).coAwait()?.let {
+      JsonUtils.readValue<ContinuationEntry>(it).continuation
+    }
+  }
+
+  override suspend fun countContinuations(
+    submissionId: String?,
+    status: SubmissionRegistry.ContinuationStatus?
+  ): Long {
+    return findContinuationEntries()
+        .count {
+          (submissionId == null || it.submissionId == submissionId) &&
+              (status == null || it.status == status)
+        }
+        .toLong()
+  }
+
+  override suspend fun getContinuationSubmissionId(continuationId: String): String {
+    return getContinuationEntryById(continuationId).submissionId
+  }
+
+  override suspend fun getContinuationStatus(continuationId: String): SubmissionRegistry.ContinuationStatus {
+    return getContinuationEntryById(continuationId).status
+  }
+
+  override suspend fun setContinuationStatus(
+    continuationId: String,
+    status: SubmissionRegistry.ContinuationStatus
+  ) {
+    updateContinuation(continuationId) { it.copy(status = status) }
+  }
+
+  override suspend fun setAllContinuationsStatus(
+    submissionId: String,
+    currentStatus: SubmissionRegistry.ContinuationStatus,
+    newStatus: SubmissionRegistry.ContinuationStatus
+  ) {
+    val sharedData = vertx.sharedData()
+    val lock = sharedData.getLock(LOCK_CONTINUATIONS).coAwait()
+    try {
+      val map = continuations.coAwait()
+      awaitResult<List<String>> { map.values(it) }
+        .map { JsonUtils.readValue<ContinuationEntry>(it) }
+        .filter { it.submissionId == submissionId && it.status == currentStatus }
+        .forEach { entry ->
+          val newEntry = entry.copy(status = newStatus)
+          map.put(entry.continuation.id,
+            JsonUtils.writeValueAsString(newEntry)).coAwait()
+        }
+    } finally {
+      lock.release()
+    }
+  }
+
+  override suspend fun getContinuationResults(continuationId: String): Map<String, List<Any>>? {
+    return getContinuationEntryById(continuationId).results
+  }
+
+  override suspend fun setContinuationResults(
+    continuationId: String,
+    results: Map<String, List<Any>>?
+  ) {
+    updateContinuation(continuationId) { it.copy(results = results) }
+  }
+
+  override suspend fun getContinuationStatusAndResultsIfFinished(continuationIds: Collection<String>): Map<String, Pair<SubmissionRegistry.ContinuationStatus, Map<String, List<Any>>?>> {
+    val ids = continuationIds.toSet()
+    return findContinuationEntries()
+        .filter {
+          ids.contains(it.continuation.id) &&
+              it.status != SubmissionRegistry.ContinuationStatus.REGISTERED
+        }
+        .associateBy({ it.continuation.id }, { it.status to it.results })
+  }
+
 
   private suspend fun searchSubmissions(query: Query, locators: Set<Locator>):
       List<InternalSearchResult> {

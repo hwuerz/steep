@@ -7,6 +7,7 @@ import db.MetadataRegistryFactory
 import db.PluginRegistryFactory
 import db.SubmissionRegistry
 import db.SubmissionRegistry.ProcessChainStatus
+import db.SubmissionRegistry.ContinuationStatus
 import db.SubmissionRegistryFactory
 import helper.JsonUtils
 import helper.YamlUtils
@@ -39,6 +40,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import model.Submission
 import model.Submission.Status
+import model.continuation.Continuation
 import model.processchain.Argument
 import model.processchain.ProcessChain
 import model.workflow.Action
@@ -175,6 +177,7 @@ class ControllerTest {
     coEvery { submissionRegistry.getSubmissionExecutionState(submission.id) } returns null
     coEvery { submissionRegistry.setSubmissionStartTime(submission.id, any()) } just Runs
     coEvery { submissionRegistry.setSubmissionEndTime(submission.id, any()) } just Runs
+    coEvery { submissionRegistry.getContinuationStatusAndResultsIfFinished(any()) } returns emptyMap()
 
     val processChainsSlot = slot<List<ProcessChain>>()
     coEvery { submissionRegistry.addProcessChains(capture(processChainsSlot), submission.id) } answers {
@@ -387,6 +390,9 @@ class ControllerTest {
         processChains.map { it to submission.id }
     coEvery { submissionRegistry.getSubmissionExecutionState(submission.id) } returns
         JsonUtils.toJson(executionState)
+    coEvery { submissionRegistry.findContinuations(submission.id,
+        any(), any(), any(), any()) } returns emptyList()
+    coEvery { submissionRegistry.getContinuationStatusAndResultsIfFinished(any()) } returns emptyMap()
 
     // there are no accepted submissions
     coEvery { submissionRegistry.fetchNextSubmission(Status.ACCEPTED, Status.RUNNING) } returns null
@@ -670,5 +676,145 @@ class ControllerTest {
       assertThat(originalPriorityValidated).isTrue
       assertThat(changedPriorityValidated).isTrue()
     }
+  }
+
+  /**
+   * Runs a workflow that exercises suspend/continuation behavior: pause at
+   * suspend action, wait for user-provided continuation results, then resume
+   * and finish workflow.
+   * @param vertx the Vert.x instance
+   * @param ctx the test context
+   */
+  @Test
+  fun continuationWaitAndResume(vertx: Vertx, ctx: VertxTestContext) {
+    val workflow = readWorkflow("suspend")
+    val submission = Submission(workflow = workflow)
+    val acceptedSubmissions = mutableListOf(submission)
+
+    val continuationResultValue = "/tmp/user-provided-input.txt"
+    var firstProcessChainId: String? = null // The generated ID for the first process chain. Needed to provide an answer to getProcessChainStatusAndResultsIfFinished calls
+    var firstProcessChainOutputFileValue: String? = null // The path to the written output file in the first process chain (cp1)
+    var secondProcessChainId: String? = null // The generated ID for the second process chain. Needed to provide an answer to getProcessChainStatusAndResultsIfFinished calls
+    var continuation: Continuation? = null // Contains the continuation when it is created
+    var continuationLookupCalls = 0 // How often our continuation status was queried by the controller
+    var processChainBatch = 0 // Counts how many process chain batches were already added (each batch contains only one pc in our test)
+
+    // mock metadata registry
+    coEvery { metadataRegistry.findServices() } returns services
+
+    // mock submission registry
+    coEvery { submissionRegistry.getSubmissionStatus(submission.id) } returns Status.RUNNING
+    coEvery { submissionRegistry.getSubmissionExecutionState(submission.id) } returns null
+    coEvery { submissionRegistry.setSubmissionExecutionState(submission.id, any()) } just Runs
+    coEvery { submissionRegistry.setSubmissionStartTime(submission.id, any()) } just Runs
+    coEvery { submissionRegistry.setSubmissionResults(submission.id, any()) } just Runs
+    coEvery { submissionRegistry.setSubmissionErrorMessage(any(), any()) } just Runs
+    coEvery { submissionRegistry.setSubmissionStatus(submission.id, Status.RUNNING) } just Runs
+    coEvery { submissionRegistry.setSubmissionStatus(submission.id, Status.SUCCESS) } just Runs
+    coEvery { submissionRegistry.setSubmissionStatus(submission.id, Status.ERROR) } answers {
+      ctx.failNow(NoStackTraceThrowable("Submission failed unexpectedly"))
+    }
+
+    val continuationsSlot = slot<Collection<Continuation>>()
+    coEvery { submissionRegistry.addContinuations(capture(continuationsSlot), submission.id) } answers {
+      ctx.verify {
+        assertThat(continuationsSlot.captured).hasSize(1)
+        val captured = continuationsSlot.captured.first()
+        continuation = captured
+        assertThat(captured.suspendActionId).isEqualTo("modification")
+        assertThat(captured.inputs.map { it.id }).containsExactly("suspend_input")
+        assertThat(captured.inputs.first().value).isEqualTo(firstProcessChainOutputFileValue)
+        assertThat(captured.outputs.map { it.id }).containsExactly("new_input")
+      }
+    }
+
+    val processChainsSlot = slot<List<ProcessChain>>()
+    coEvery { submissionRegistry.addProcessChains(capture(processChainsSlot), submission.id) } answers {
+      processChainBatch++
+      ctx.verify {
+        assertThat(processChainsSlot.captured).hasSize(1)
+      }
+
+      val pc = processChainsSlot.captured.first()
+      if (processChainBatch == 1) {
+        firstProcessChainId = pc.id
+        ctx.verify {
+          assertThat(pc.executables).hasSize(1)
+          assertThat(pc.executables.first().id).isEqualTo("cp1")
+        }
+        firstProcessChainOutputFileValue = pc.executables.first().arguments.first { it.id == "output_file" }.variable.value
+      } else {
+        secondProcessChainId = pc.id
+        ctx.verify {
+          assertThat(continuationLookupCalls)
+              .withFailMessage("Controller did not wait for continuation input before resuming")
+              .isGreaterThanOrEqualTo(2)
+          assertThat(pc.executables).hasSize(1)
+          assertThat(pc.executables.first().id).isEqualTo("cp2")
+          val inputArg = pc.executables.first().arguments.first { it.id == "input_file" }
+          assertThat(inputArg.variable.value).isEqualTo(continuationResultValue)
+        }
+      }
+    }
+
+    coEvery { submissionRegistry.getProcessChainStatusAndResultsIfFinished(any()) } answers {
+      val ids = firstArg<Collection<String>>()
+      val firstPcId = firstProcessChainId
+      val secondPcId = secondProcessChainId
+      when {
+        // If the process chains were already added (meaning in this test directly processed), include their results
+        firstPcId != null && ids.contains(firstPcId) -> mapOf(
+            firstPcId to (ProcessChainStatus.SUCCESS to mapOf(
+                "output_file1" to listOf<Any>(firstProcessChainOutputFileValue!!)
+            ))
+        )
+        secondPcId != null && ids.contains(secondPcId) -> mapOf(
+            secondPcId to (ProcessChainStatus.SUCCESS to mapOf(
+                "output_file2" to listOf<Any>("/out/final.txt")
+            ))
+        )
+        else -> emptyMap()
+      }
+    }
+
+    coEvery { submissionRegistry.getContinuationStatusAndResultsIfFinished(any()) } answers {
+      val ids = firstArg<Collection<String>>()
+      val c = continuation
+      if (c != null && ids.contains(c.id)) {
+        continuationLookupCalls++
+        if (continuationLookupCalls == 1) {
+          // First poll: user has not answered yet
+          emptyMap()
+        } else {
+          mapOf(c.id to (ContinuationStatus.PROCESSED to mapOf(
+              "new_input" to listOf<Any>(continuationResultValue)
+          )))
+        }
+      } else {
+        emptyMap()
+      }
+    }
+
+    coEvery { submissionRegistry.setSubmissionEndTime(submission.id, any()) } answers {
+      ctx.verify {
+        coVerify(exactly = 1) {
+          submissionRegistry.setSubmissionStatus(submission.id, Status.SUCCESS)
+          submissionRegistry.setSubmissionStartTime(submission.id, any())
+          submissionRegistry.setSubmissionEndTime(submission.id, any())
+        }
+        assertThat(processChainBatch).isEqualTo(2) // We have one pc for cp1 and one for cp2. The suspend action does NOT lead to an own pc.
+        assertThat(continuationLookupCalls)
+            .withFailMessage("Continuation was never polled")
+            .isGreaterThanOrEqualTo(2)
+      }
+      ctx.completeNow()
+    }
+
+    // execute submissions
+    coEvery { submissionRegistry.fetchNextSubmission(Status.ACCEPTED, Status.RUNNING) } answers {
+      if (acceptedSubmissions.isEmpty()) null else acceptedSubmissions.removeAt(0)
+    }
+
+    vertx.eventBus().publish(AddressConstants.CONTROLLER_LOOKUP_NOW, null)
   }
 }

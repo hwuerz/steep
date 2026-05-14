@@ -10,6 +10,7 @@ import model.workflow.GenericParameter
 import model.workflow.IncludeAction
 import model.workflow.IncludeOutputParameter
 import model.workflow.InputParameter
+import model.workflow.SuspendAction
 import model.workflow.Variable
 import model.workflow.Workflow
 
@@ -121,6 +122,8 @@ object MacroPreprocessor {
             changed = true
           }
         }
+
+        is SuspendAction -> newActions.add(a)
       }
     }
 
@@ -278,6 +281,27 @@ object MacroPreprocessor {
               )
           )
         }
+
+        // TODO Duplicated code in ExecuteAction and IncludeAction
+        is SuspendAction -> {
+          val actionInputs =
+            a.inputs.map { mapInputParameter(it, inputs, renames) }
+          val actionOutputs = a.outputs.map { o ->
+            outputs[o.variable.id]?.let { includeOutput ->
+              o.copy(variable = includeOutput.variable)
+            } ?: o.copy(
+              variable = renames.rename(o.variable)
+            )
+          }
+          result.add(
+            a.copy(
+              id = newId,
+              inputs = actionInputs,
+              outputs = actionOutputs,
+              dependsOn = renameDependsOn(a) + dependencies
+            )
+          )
+        }
       }
     }
     return result
@@ -317,6 +341,7 @@ object MacroPreprocessor {
           collectActionIds(a.actions, result)
         }
         is IncludeAction -> result.add(a.id)
+        is SuspendAction -> result.add(a.id)
       }
     }
   }
@@ -385,6 +410,19 @@ object MacroPreprocessor {
           // there cannot be an IncludeAction any more at this point!
           throw RuntimeException("Still found an IncludeAction although " +
               "workflow was already preprocessed")
+        }
+
+        // TODO Duplicated code in ExecuteAction
+        is SuspendAction -> {
+          val newDeps = update(a.dependsOn)
+          newActions.add(
+            if (newDeps !== a.dependsOn) {
+              changed = true
+              a.copy(dependsOn = newDeps)
+            } else {
+              a
+            }
+          )
         }
       }
     }

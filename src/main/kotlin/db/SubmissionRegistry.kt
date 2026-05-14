@@ -2,6 +2,7 @@ package db
 
 import io.vertx.core.json.JsonObject
 import model.Submission
+import model.continuation.Continuation
 import model.processchain.ProcessChain
 import model.processchain.Run
 import search.Query
@@ -47,6 +48,29 @@ interface SubmissionRegistry : Registry {
      * The process chain failed
      */
     ERROR
+  }
+
+  /**
+   * The status of a continuation
+   */
+  enum class ContinuationStatus {
+    /**
+     * The continuation has been added to the registry.
+     * It is waiting for user input.
+     */
+    REGISTERED,
+
+    /**
+     * The continuation was processed. The user provided
+     * the required input.
+     */
+    PROCESSED,
+
+    /**
+     * The continuation was cancelled. There will be no
+     * input by the user.
+     */
+    CANCELLED,
   }
 
   /**
@@ -493,6 +517,107 @@ interface SubmissionRegistry : Registry {
    */
   suspend fun getProcessChainStatusAndResultsIfFinished(processChainIds: Collection<String>):
       Map<String, Pair<ProcessChainStatus, Map<String, List<Any>>?>>
+
+  /**
+   * Add new continuations to a submission
+   * @param continuations the continuations to add
+   * @param submissionId the submission ID
+   * @param status the status of the continuations
+   * @throws NoSuchElementException if there is no submission with the given ID
+   */
+  suspend fun addContinuations(continuations: Collection<Continuation>,
+                               submissionId: String, status: ContinuationStatus = ContinuationStatus.REGISTERED)
+
+  /**
+   * Get a list of all continuations in the registry
+   * @param submissionId an optional ID of a submission the continuations
+   * should belong to
+   * @param status an optional status the returned continuations should have
+   * @param size the maximum number of continuations to return (may be negative
+   * if all continuations should be returned)
+   * @param offset the index of the first continuation to return
+   * @param order a positive number if the continuations should be returned in
+   * an ascending order, negative otherwise
+   * @return all continuations and the ID of their respective submission
+   */
+  suspend fun findContinuations(submissionId: String? = null,
+                                status: ContinuationStatus? = null, size: Int = -1, offset: Int = 0,
+                                order: Int = 1): Collection<Pair<Continuation, String>>
+
+  /**
+   * Get a single continuation from the registry
+   * @param continuationId the continuation's ID
+   * @return the continuation or `null` if the continuation does not exist
+   */
+  suspend fun findContinuationById(continuationId: String): Continuation?
+
+  /**
+   * Count the number of registered continuations
+   * @param submissionId an optional submission ID the continuations should
+   * belong to
+   * @param status an optional status the continuations should have
+   * @return the number of continuations in the registry
+   */
+  suspend fun countContinuations(submissionId: String? = null,
+                                 status: ContinuationStatus? = null): Long
+
+  /**
+   * Get the ID of the submission the given continuation belongs to
+   * @param continuationId the continuation ID
+   * @return the ID of the submission the continuation belongs to
+   * @throws NoSuchElementException if the continuation does not exist
+   */
+  suspend fun getContinuationSubmissionId(continuationId: String): String
+
+  /**
+   * Get the status of a continuation
+   * @param continuationId the continuation ID
+   * @return the continuation status
+   * @throws NoSuchElementException if the continuation does not exist
+   */
+  suspend fun getContinuationStatus(continuationId: String): ContinuationStatus
+
+  /**
+   * Set the status of a continuation
+   * @param continuationId the continuation ID
+   * @param status the new status
+   */
+  suspend fun setContinuationStatus(continuationId: String, status: ContinuationStatus)
+
+  /**
+   * Find all continuations that belong to the submission with the given ID
+   * and that have the [currentStatus]. Set their status to [newStatus].
+   * @param submissionId the ID of the submission whose continuations to update
+   * @param currentStatus the current status of the continuations to update
+   * @param newStatus the new status
+   */
+  suspend fun setAllContinuationsStatus(submissionId: String,
+                                        currentStatus: ContinuationStatus, newStatus: ContinuationStatus)
+
+  /**
+   * Get the results of a continuation.
+   * @param continuationId the continuation ID
+   * @return the results (may be `null` if the continuation does not have any
+   * result yet)
+   */
+  suspend fun getContinuationResults(continuationId: String): Map<String, List<Any>>?
+
+  /**
+   * Set the results of a continuation.
+   * This will not update the status of the continuation. Make sure to change it
+   * as well, when you are ready to continue with workflow execution.
+   * @param continuationId the continuation ID
+   * @param results the results to set (may be `null` if the results should be removed)
+   */
+  suspend fun setContinuationResults(continuationId: String, results: Map<String, List<Any>>?)
+
+  /**
+   * Query the continuations with the given [continuationIds] and return
+   * status and results of those that are finished (i.e. not
+   * [ContinuationStatus.REGISTERED])
+   */
+  suspend fun getContinuationStatusAndResultsIfFinished(continuationIds: Collection<String>):
+      Map<String, Pair<ContinuationStatus, Map<String, List<Any>>?>>
 
   /**
    * Searches the registry to find objects that match the given [query].

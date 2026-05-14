@@ -1,6 +1,7 @@
 package db
 
 import com.fasterxml.jackson.annotation.JsonIgnore
+import com.fasterxml.jackson.module.kotlin.convertValue
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.mongodb.MongoGridFSException
 import com.mongodb.client.model.FindOneAndUpdateOptions
@@ -36,6 +37,7 @@ import io.vertx.core.json.JsonObject
 import io.vertx.kotlin.core.json.jsonArrayOf
 import io.vertx.kotlin.core.json.jsonObjectOf
 import model.Submission
+import model.continuation.Continuation
 import model.processchain.Executable
 import model.processchain.ProcessChain
 import model.processchain.Run
@@ -76,7 +78,10 @@ class MongoDBSubmissionRegistry(private val vertx: Vertx,
      */
     private const val COLL_SUBMISSIONS = "submissions"
     private const val COLL_PROCESS_CHAINS = "processChains"
+    private const val COLL_CONTINUATIONS = "continuations"
     private const val BUCKET_PROCESS_CHAINS = "processChains"
+    private const val BUCKET_CONTINUATIONS = "continuations"
+    private const val BUCKET_CONTINUATIONS_RESULTS = "continuationsResults"
     private const val BUCKET_PROCESS_CHAIN_RESULTS = "processChainResults"
     private const val BUCKET_EXECUTION_STATES = "executionStates"
     private const val BUCKET_SUBMISSION_RESULTS = "submissionResults"
@@ -87,6 +92,8 @@ class MongoDBSubmissionRegistry(private val vertx: Vertx,
     private const val REQUIRED_CAPABILITIES = "requiredCapabilities"
     private const val ERROR_MESSAGE = "errorMessage"
     private const val AUTO_RESUME_AFTER = "autoResumeAfter"
+    private const val RESULTS = "results"
+    private const val SUSPEND_ACTION_ID = "suspendActionId"
     private const val SEQUENCE = "sequence"
     private const val PRIORITY = "priority"
     private const val RUNS = "runs"
@@ -140,6 +147,8 @@ class MongoDBSubmissionRegistry(private val vertx: Vertx,
       db.getCollection(COLL_SUBMISSIONS, JsonObject::class.java)
   private val collProcessChains: MongoCollection<JsonObject> =
       db.getCollection(COLL_PROCESS_CHAINS, JsonObject::class.java)
+  private val collContinuations: MongoCollection<JsonObject> =
+      db.getCollection(COLL_CONTINUATIONS, JsonObject::class.java)
   private val bucketProcessChains: GridFSBucket =
       GridFSBuckets.create(db, BUCKET_PROCESS_CHAINS)
   private val bucketProcessChainResults: GridFSBucket =
@@ -148,6 +157,10 @@ class MongoDBSubmissionRegistry(private val vertx: Vertx,
       GridFSBuckets.create(db, BUCKET_EXECUTION_STATES)
   private val bucketSubmissionResults: GridFSBucket =
       GridFSBuckets.create(db, BUCKET_SUBMISSION_RESULTS)
+  private val bucketContinuations: GridFSBucket =
+    GridFSBuckets.create(db, BUCKET_CONTINUATIONS)
+  private val bucketContinuationsResults: GridFSBucket =
+    GridFSBuckets.create(db, BUCKET_CONTINUATIONS_RESULTS)
 
   init {
     if (createIndexes) {
@@ -174,6 +187,18 @@ class MongoDBSubmissionRegistry(private val vertx: Vertx,
       )).subscribe(object : DefaultSubscriber<String>() {
         override fun onError(t: Throwable) {
           log.error("Could not create index on collection `$COLL_PROCESS_CHAINS'", t)
+        }
+      })
+
+      // create indexes for `continuations` collection
+      collContinuations.createIndexes(listOf(
+          IndexModel(Indexes.ascending(SUBMISSION_ID), IndexOptions().background(true)),
+          IndexModel(Indexes.ascending(STATUS), IndexOptions().background(true)),
+          IndexModel(Indexes.ascending(SEQUENCE), IndexOptions().background(true)),
+          IndexModel(Indexes.ascending(SUSPEND_ACTION_ID), IndexOptions().background(true))
+      )).subscribe(object : DefaultSubscriber<String>() {
+        override fun onError(t: Throwable) {
+          log.error("Could not create index on collection `$COLL_CONTINUATIONS'", t)
         }
       })
     }
@@ -1000,6 +1025,165 @@ class MongoDBSubmissionRegistry(private val vertx: Vertx,
       f.value to results
     }
   }
+
+  /**
+   * Handle continuation [document] and return pair of continuation and submission ID
+   */
+  private suspend fun readContinuation(document: JsonObject): Pair<Continuation, String> {
+    val submissionId = document.getString(SUBMISSION_ID, "")
+    val id = document.getString(INTERNAL_ID)
+    val buf = readGridFSDocument(bucketContinuations, id)
+      ?: throw IllegalStateException("Got continuation metadata with " +
+          "ID `$id' but could not find corresponding object in GridFS bucket.")
+    return Pair(JsonUtils.mapper.readValue<Continuation>(buf.bytes), submissionId)
+  }
+
+  override suspend fun addContinuations(
+    continuations: Collection<Continuation>,
+    submissionId: String,
+    status: SubmissionRegistry.ContinuationStatus
+  ) {
+    val submissionCount = collSubmissions.countDocumentsAwait(jsonObjectOf(
+        INTERNAL_ID to submissionId
+    ))
+    if (submissionCount == 0L) {
+      throw NoSuchElementException("There is no submission with ID `$submissionId'")
+    }
+
+    val sequence = getNextSequence(COLL_CONTINUATIONS, continuations.size)
+    val requests = continuations.mapIndexed { i, c ->
+      writeGridFSDocument(bucketContinuations, c.id, JsonUtils.toJson(c))
+      val doc = jsonObjectOf(
+        INTERNAL_ID to c.id,
+        SEQUENCE to sequence + i,
+        SUBMISSION_ID to submissionId,
+        STATUS to status.toString(),
+        SUSPEND_ACTION_ID to c.suspendActionId
+      )
+      InsertOneModel(doc)
+    }
+
+    collContinuations.bulkWriteAwait(requests)
+  }
+
+  private suspend fun getContinuationResultsInternal(continuationId: String): Map<String, List<Any>>? {
+    val buf = readGridFSDocument(bucketContinuationsResults, continuationId)
+    return buf?.let { JsonUtils.readValue(it.bytes) }
+  }
+
+  override suspend fun findContinuations(
+    submissionId: String?,
+    status: SubmissionRegistry.ContinuationStatus?,
+    size: Int,
+    offset: Int,
+    order: Int
+  ): Collection<Pair<Continuation, String>> {
+    return collContinuations.findAwait(JsonObject().also {
+      if (submissionId != null) {
+        it.put(SUBMISSION_ID, submissionId)
+      }
+      if (status != null) {
+        it.put(STATUS, status.toString())
+      }
+    }, size, offset, jsonObjectOf(
+        SEQUENCE to order
+    )).map { readContinuation(it) }
+  }
+
+  override suspend fun findContinuationById(continuationId: String): Continuation? {
+    return readGridFSDocument(bucketContinuations, continuationId)?.let {
+      JsonUtils.mapper.readValue(it.bytes)
+    }
+  }
+
+  override suspend fun countContinuations(
+    submissionId: String?,
+    status: SubmissionRegistry.ContinuationStatus?
+  ): Long {
+    return collContinuations.countDocumentsAwait(JsonObject().also {
+      if (submissionId != null) {
+        it.put(SUBMISSION_ID, submissionId)
+      }
+      if (status != null) {
+        it.put(STATUS, status.toString())
+      }
+    })
+  }
+
+  override suspend fun getContinuationSubmissionId(continuationId: String): String {
+    return getField(collContinuations, "continuation", continuationId, SUBMISSION_ID)
+  }
+
+  override suspend fun getContinuationStatus(continuationId: String): SubmissionRegistry.ContinuationStatus {
+    return getField<String>(collContinuations, "continuation", continuationId, STATUS).let {
+      SubmissionRegistry.ContinuationStatus.valueOf(it)
+    }
+  }
+
+  override suspend fun setContinuationStatus(
+    continuationId: String,
+    status: SubmissionRegistry.ContinuationStatus
+  ) {
+    updateField(collContinuations, continuationId, STATUS, status.toString())
+  }
+
+  override suspend fun setAllContinuationsStatus(
+    submissionId: String,
+    currentStatus: SubmissionRegistry.ContinuationStatus,
+    newStatus: SubmissionRegistry.ContinuationStatus
+  ) {
+    collContinuations.updateManyAwait(jsonObjectOf(
+        SUBMISSION_ID to submissionId,
+        STATUS to currentStatus.toString()
+    ), jsonObjectOf(
+        "\$set" to jsonObjectOf(
+            STATUS to newStatus.toString()
+        )
+    ))
+  }
+
+  override suspend fun getContinuationResults(continuationId: String): Map<String, List<Any>>? {
+    val continuationCount = collContinuations.countDocumentsAwait(jsonObjectOf(
+        INTERNAL_ID to continuationId
+    ))
+    if (continuationCount == 0L) {
+      throw NoSuchElementException("There is no continuation with ID `$continuationId'")
+    }
+    return getContinuationResultsInternal(continuationId)
+  }
+
+  override suspend fun setContinuationResults(
+    continuationId: String,
+    results: Map<String, List<Any>>?
+  ) {
+    writeGridFSDocument(bucketContinuationsResults, continuationId,
+        results?.let { JsonObject(it) })
+  }
+
+  override suspend fun getContinuationStatusAndResultsIfFinished(continuationIds: Collection<String>): Map<String, Pair<SubmissionRegistry.ContinuationStatus, Map<String, List<Any>>?>> {
+    val finished = collContinuations.findAwait(jsonObjectOf(
+        STATUS to jsonObjectOf(
+            "\$ne" to SubmissionRegistry.ContinuationStatus.REGISTERED.toString()
+        ),
+        INTERNAL_ID to jsonObjectOf(
+            "\$in" to continuationIds.toList()
+        )
+    ), projection = jsonObjectOf(
+        INTERNAL_ID to 1,
+        STATUS to 1
+    )).associateBy({ it.getString(INTERNAL_ID) }, {
+      SubmissionRegistry.ContinuationStatus.valueOf(it.getString(STATUS)) })
+
+    return finished.mapValues { f ->
+      val results = if (f.value != SubmissionRegistry.ContinuationStatus.REGISTERED) {
+        getContinuationResultsInternal(f.key)
+      } else {
+        null
+      }
+      f.value to results
+    }
+  }
+
 
   /**
    * Create an operator that looks for a [value] in a given [field]. Either

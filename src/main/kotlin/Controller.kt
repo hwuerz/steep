@@ -15,6 +15,7 @@ import db.MetadataRegistryFactory
 import db.PluginRegistry
 import db.PluginRegistryFactory
 import db.SubmissionRegistry
+import db.SubmissionRegistry.ContinuationStatus
 import db.SubmissionRegistry.ProcessChainStatus
 import db.SubmissionRegistryFactory
 import helper.JsonUtils
@@ -31,6 +32,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import model.Submission
+import model.continuation.Continuation
 import model.plugins.call
 import model.processchain.Executable
 import model.processchain.ProcessChain
@@ -303,6 +305,7 @@ class Controller(private val disablePeriodicLookupForSubmissions: Boolean = fals
 
       // check if submission needs to be resumed
       var processChainsToResume: Collection<ProcessChain>? = null
+      var continuationsToResume: Collection<Continuation>? = null
       val executionState = submissionRegistry.getSubmissionExecutionState(submission.id)
       if (executionState == null) {
         // submission has not been started before - start it now
@@ -327,6 +330,10 @@ class Controller(private val disablePeriodicLookupForSubmissions: Boolean = fals
         // of all process chains so it can be passed to the generator.
         processChainsToResume = submissionRegistry.findProcessChains(
             submission.id).map { it.first }
+
+        continuationsToResume = submissionRegistry.findContinuations(
+            submission.id, ContinuationStatus.REGISTERED)
+          .map { it.first }
       }
 
       // main loop
@@ -337,18 +344,24 @@ class Controller(private val disablePeriodicLookupForSubmissions: Boolean = fals
       var executedExecutableIds = setOf<String>()
       val submissionResults = mutableMapOf<String, List<Any>>()
       val processChains = mutableMapOf<String, ProcessChain>()
+      val continuations = mutableMapOf<String, Continuation>()
       val gauge = gaugeProcessChains.labels(submission.id)
       gauge.set(0.0)
       while (true) {
         // generate process chains
-        val newProcessChains = if (processChainsToResume != null) {
+        val (newProcessChains, newContinuations) = if (processChainsToResume != null) {
           val pcs = processChainsToResume
           processChainsToResume = null
-          pcs
+          pcs to emptyList()
+        } else if (!continuationsToResume.isNullOrEmpty()) {
+          val continuations = continuationsToResume
+          continuationsToResume = null
+          emptyList<ProcessChain>() to continuations
         } else {
           val pcs = applyPlugins(generator.generate(results, executedExecutableIds),
             submission.workflow)
-          if (processChains.isEmpty() && pcs.isEmpty()) {
+          val continuations = generator.getContinuations()
+          if (processChains.isEmpty() && pcs.isEmpty() && continuations.isEmpty()) {
             break
           }
 
@@ -376,18 +389,25 @@ class Controller(private val disablePeriodicLookupForSubmissions: Boolean = fals
             submissionRegistry.addProcessChains(pcs, submission.id)
           }
 
+          // store continuations in submission registry
+          if (continuations.isNotEmpty()) {
+            submissionRegistry.addContinuations(continuations, submission.id)
+          }
+
           // store the generator's state so we are able to resume the
           // submission later if necessary
           submissionRegistry.setSubmissionExecutionState(submission.id,
               generator.persistState())
 
-          pcs
+          pcs to continuations
         }
 
         newProcessChains.associateByTo(processChains) { it.id }
         gauge.set(processChains.size.toDouble())
 
-        if (newProcessChains.isNotEmpty()) {
+        newContinuations.associateByTo(continuations) { it.id }
+
+        if (newProcessChains.isNotEmpty() || newContinuations.isNotEmpty()) {
           // notify scheduler(s)
           vertx.eventBus().publish(AddressConstants.SCHEDULER_LOOKUP_NOW, null)
         }
@@ -397,7 +417,7 @@ class Controller(private val disablePeriodicLookupForSubmissions: Boolean = fals
 
         // wait for process chain results
         totalProcessChains += newProcessChains.size
-        val w = waitForProcessChains(processChains, collectTemporaryResults)
+        val w = waitForProcessChains(processChains, continuations, collectTemporaryResults)
         results = w.results
         failed += w.failed
         cancelled += w.cancelled
@@ -462,6 +482,7 @@ class Controller(private val disablePeriodicLookupForSubmissions: Boolean = fals
       submissionRegistry.setSubmissionErrorMessage(submission.id, t.message)
       submissionRegistry.setSubmissionEndTime(submission.id, Instant.now())
       cancelProcessChainsOfSubmission(submission.id)
+      cancelContinuationsOfSubmission(submission.id)
     } finally {
       if (!shuttingDown) {
         // the submission was either successful or it failed - remove the current
@@ -478,10 +499,12 @@ class Controller(private val disablePeriodicLookupForSubmissions: Boolean = fals
   /**
    * Wait for the given [processChains] to finish. If some of them finish
    * earlier than others, remove them from [processChains] and return early.
-   * [collectTemporaryResults] of process chains even if they are only
-   * temporary, or don't if only submission results should be kept.
+   * Also wait for the given [continuations] if they have received values.
+   * [collectTemporaryResults] of process chains and continuations even if
+   * they are only temporary, or don't if only submission results should be kept.
    */
   private suspend fun waitForProcessChains(processChains: MutableMap<String, ProcessChain>,
+      continuations: MutableMap<String, Continuation>,
       collectTemporaryResults: Boolean): WaitForProcessChainsResult {
     val results = mutableMapOf<String, List<Any>>()
     var succeeded = 0
@@ -494,6 +517,7 @@ class Controller(private val disablePeriodicLookupForSubmissions: Boolean = fals
       delay(lookupInterval)
 
       val finishedProcessChains = mutableSetOf<String>()
+      val finishedContinuations = mutableSetOf<String>()
       try {
         val finished = submissionRegistry.getProcessChainStatusAndResultsIfFinished(
             processChains.keys)
@@ -529,6 +553,34 @@ class Controller(private val disablePeriodicLookupForSubmissions: Boolean = fals
             else -> { /* we will never get here */ }
           }
         }
+
+        val finishedContinuationsResponse = submissionRegistry.getContinuationStatusAndResultsIfFinished(continuations.keys)
+        for (f in finishedContinuationsResponse) {
+          val continuationId = f.key
+          val status = f.value.first
+          val continuationResults = f.value.second
+          when (status) {
+            ContinuationStatus.PROCESSED -> {
+              if (continuationResults != null) {
+                if (collectTemporaryResults) {
+                  results.putAll(continuationResults)
+                } else {
+                  results.putAll(continuationResults.filterValues { hasSubmissionResults(it) })
+                }
+              }
+              succeeded++
+              finishedContinuations.add(continuationId)
+            }
+
+            ContinuationStatus.CANCELLED -> {
+              cancelled++
+              finishedContinuations.add(continuationId)
+            }
+
+            else -> { /* we will never get here */ }
+          }
+        }
+
         lookupErrors = 0
       } catch (t: Throwable) {
         log.warn("Could not look up process chain status", t)
@@ -539,6 +591,7 @@ class Controller(private val disablePeriodicLookupForSubmissions: Boolean = fals
       }
 
       processChains.keys.removeAll(finishedProcessChains)
+      continuations.keys.removeAll(finishedContinuations)
     }
 
     return WaitForProcessChainsResult(results, failed, cancelled, executedExecutableIds)
@@ -573,5 +626,12 @@ class Controller(private val disablePeriodicLookupForSubmissions: Boolean = fals
     for (pcId in pcIds) {
       vertx.eventBus().send(LOCAL_AGENT_ADDRESS_PREFIX + pcId, cancelMsg)
     }
+  }
+
+  /**
+   * Cancel all continuations of the submission with the given [id]
+   */
+  private suspend fun cancelContinuationsOfSubmission(id: String) {
+    submissionRegistry.setAllContinuationsStatus(id, ContinuationStatus.REGISTERED, ContinuationStatus.CANCELLED)
   }
 }

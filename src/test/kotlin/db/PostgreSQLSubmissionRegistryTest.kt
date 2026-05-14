@@ -28,5 +28,6 @@ class PostgreSQLSubmissionRegistryTest : PostgreSQLTest, SubmissionRegistryTest(
   override suspend fun deleteFromTables(client: Pool) {
     client.query("DELETE FROM submissions").execute().coAwait()
     client.query("DELETE FROM processchains").execute().coAwait()
+    client.query("DELETE FROM continuations").execute().coAwait()
   }
 }

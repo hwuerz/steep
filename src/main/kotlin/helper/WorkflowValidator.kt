@@ -13,6 +13,7 @@ import model.workflow.GenericParameter
 import model.workflow.IncludeAction
 import model.workflow.InputParameter
 import model.workflow.Parameter
+import model.workflow.SuspendAction
 import model.workflow.Variable
 import model.workflow.Workflow
 
@@ -110,6 +111,7 @@ class WorkflowValidator private constructor(private val type: Type,
       executeActionVisitor: (ExecuteAction, List<String>) -> Unit = { _, _ -> },
       forEachActionVisitor: (ForEachAction, List<String>) -> Unit = { _, _ -> },
       includeActionVisitor: (IncludeAction, List<String>) -> Unit = { _, _ -> },
+      suspendActionVisitor: (SuspendAction, List<String>) -> Unit = { _, _ -> },
       path: List<String> = listOf(type.rootPath)) {
     for ((i, action) in actions.withIndex()) {
       when (action) {
@@ -122,12 +124,17 @@ class WorkflowValidator private constructor(private val type: Type,
           val newPath = path + listOf("actions[$i](for-each)")
           forEachActionVisitor(action, newPath)
           visit(action.actions, results, executeActionVisitor,
-              forEachActionVisitor, includeActionVisitor, newPath)
+              forEachActionVisitor, includeActionVisitor, suspendActionVisitor, newPath)
         }
 
         is IncludeAction -> {
           val newPath = path + listOf("actions[$i](include ${action.macro})")
           includeActionVisitor(action, newPath)
+        }
+
+        is SuspendAction -> {
+          val newPath = path + listOf("actions[$i](suspend)")
+          suspendActionVisitor(action, newPath)
         }
       }
     }
@@ -170,6 +177,13 @@ class WorkflowValidator private constructor(private val type: Type,
               results.add(makeReservedVarError(o.variable, path + "outputs[$i]"))
             }
           }
+        },
+        suspendActionVisitor = { action, path ->
+          for ((i, o) in action.outputs.withIndex()) {
+            if (isReserved(o.variable)) {
+              results.add(makeReservedVarError(o.variable, path + "outputs[$i]"))
+            }
+          }
         }
     )
   }
@@ -205,6 +219,9 @@ class WorkflowValidator private constructor(private val type: Type,
         },
         includeActionVisitor = { action, path ->
           visitOutputs(action.outputs, path)
+        },
+        suspendActionVisitor = { action, path ->
+          visitOutputs(action.outputs, path)
         }
     )
   }
@@ -230,7 +247,8 @@ class WorkflowValidator private constructor(private val type: Type,
     }
 
     visit(actions, results, executeActionVisitor = visitor,
-        forEachActionVisitor = visitor, includeActionVisitor = visitor)
+        forEachActionVisitor = visitor, includeActionVisitor = visitor,
+        suspendActionVisitor = visitor)
   }
 
   /**
@@ -258,7 +276,8 @@ class WorkflowValidator private constructor(private val type: Type,
       Unit
     }
     visit(actions, results, executeActionVisitor = visitor,
-        forEachActionVisitor = visitor, includeActionVisitor = visitor)
+        forEachActionVisitor = visitor, includeActionVisitor = visitor,
+        suspendActionVisitor = visitor)
 
     val checkDependencies = { action: Action, path: List<String> ->
       for (d in action.dependsOn) {
@@ -271,7 +290,8 @@ class WorkflowValidator private constructor(private val type: Type,
     // check dependencies
     visit(actions, results, executeActionVisitor = checkDependencies,
         forEachActionVisitor = checkDependencies,
-        includeActionVisitor = checkDependencies)
+        includeActionVisitor = checkDependencies,
+        suspendActionVisitor = checkDependencies)
   }
 
   private fun dependsOnCycle(actions: List<Action>,
@@ -295,6 +315,9 @@ class WorkflowValidator private constructor(private val type: Type,
           nodes[a.id] = A(a, dependsOn = a.dependsOn + a.actions.map { it.id })
         },
         includeActionVisitor = { a, _ ->
+          nodes[a.id] = A(a)
+        },
+        suspendActionVisitor = { a, _ ->
           nodes[a.id] = A(a)
         }
     )
@@ -364,6 +387,9 @@ class WorkflowValidator private constructor(private val type: Type,
         },
         includeActionVisitor = { action, _ ->
           visitOutputs(action.outputs)
+        },
+        suspendActionVisitor = { action, _ ->
+          visitOutputs(action.outputs)
         }
     )
     return outputIds
@@ -404,6 +430,9 @@ class WorkflowValidator private constructor(private val type: Type,
         },
         includeActionVisitor = { action, path ->
           visitInputs(action.inputs, path)
+        },
+        suspendActionVisitor = { action, path ->
+          visitInputs(action.inputs, path)
         }
     )
   }
@@ -438,6 +467,9 @@ class WorkflowValidator private constructor(private val type: Type,
           }
         },
         includeActionVisitor = { action, path ->
+          visitOutputs(action.outputs, path)
+        },
+        suspendActionVisitor = { action, path ->
           visitOutputs(action.outputs, path)
         }
     )
@@ -475,6 +507,9 @@ class WorkflowValidator private constructor(private val type: Type,
           action.output?.let { outputIds.add(it.id) }
         },
         includeActionVisitor = { action, _ ->
+          visitOutputs(action.outputs)
+        },
+        suspendActionVisitor = { action, _ ->
           visitOutputs(action.outputs)
         }
     )
@@ -610,6 +645,7 @@ class WorkflowValidator private constructor(private val type: Type,
           is ExecuteAction -> a.outputs.forEach { frame.add(it.variable.id) }
           is ForEachAction -> a.output?.let { frame.add(it.id) }
           is IncludeAction -> a.outputs.forEach { frame.add(it.variable.id) }
+          is SuspendAction -> a.outputs.forEach { frame.add(it.variable.id) }
         }
       }
       stack.add(frame)
@@ -650,6 +686,11 @@ class WorkflowValidator private constructor(private val type: Type,
 
           is IncludeAction -> {
             val newPath = path + listOf("actions[$i](include ${action.macro})")
+            visitInputs(action.inputs, newPath)
+          }
+
+          is SuspendAction -> {
+            val newPath = path + listOf("actions[$i](suspend)")
             visitInputs(action.inputs, newPath)
           }
         }
@@ -728,6 +769,9 @@ class WorkflowValidator private constructor(private val type: Type,
         },
         includeActionVisitor = { action, path ->
           visitInputs(action.inputs, path)
+        },
+        suspendActionVisitor = { action, path ->
+          visitInputs(action.inputs, path)
         }
     )
   }
@@ -761,7 +805,16 @@ class WorkflowValidator private constructor(private val type: Type,
                   path + "outputs[$i]"))
             }
           }
-        }
+        },
+        // TODO Duplicated code in execute and include visitor
+        suspendActionVisitor = { action, path ->
+          for ((i, output) in action.outputs.withIndex()) {
+            if (inputs.contains(output.variable.id)) {
+              results.add(makeInputAsOutputError(output.variable,
+                path + "outputs[$i]"))
+            }
+          }
+        },
     )
   }
 
@@ -799,6 +852,9 @@ class WorkflowValidator private constructor(private val type: Type,
           }
         },
         includeActionVisitor = { action, path ->
+          visitInputs(action.inputs, path)
+        },
+        suspendActionVisitor = { action, path ->
           visitInputs(action.inputs, path)
         }
     )

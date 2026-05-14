@@ -57,6 +57,8 @@ import model.plugins.ProcessChainAdapterPlugin
 import model.plugins.ProcessChainConsistencyCheckerPlugin
 import model.plugins.ProgressEstimatorPlugin
 import model.plugins.RuntimePlugin
+import model.continuation.Continuation
+import model.continuation.ContinuationParameter
 import model.processchain.Argument
 import model.processchain.Executable
 import model.processchain.ProcessChain
@@ -1172,6 +1174,9 @@ class HttpEndpointTest {
             ProcessChainStatus.REGISTERED, ProcessChainStatus.CANCELLED) } just Runs
         coEvery { submissionRegistry.setAllProcessChainsStatus(s1.id,
             ProcessChainStatus.PAUSED, ProcessChainStatus.CANCELLED) } just Runs
+        coEvery { submissionRegistry.setAllContinuationsStatus(s1.id,
+            SubmissionRegistry.ContinuationStatus.REGISTERED,
+            SubmissionRegistry.ContinuationStatus.CANCELLED) } just Runs
         coEvery { submissionRegistry.countProcessChainsPerStatus(s1.id) } returns mapOf(
             ProcessChainStatus.RUNNING to 1L,
             ProcessChainStatus.CANCELLED to 2L
@@ -2385,6 +2390,314 @@ class HttpEndpointTest {
             .expect(ResponsePredicate.SC_UNPROCESSABLE_ENTITY)
             .sendJsonObject(priorityBody)
             .coAwait()
+      }
+
+      ctx.completeNow()
+    }
+  }
+
+  /**
+   * Test that the endpoint returns a list of continuations
+   */
+  @Test
+  fun getContinuations(vertx: Vertx, ctx: VertxTestContext) {
+    val s1 = Submission(workflow = Workflow())
+    val s2 = Submission(workflow = Workflow())
+
+    val c1 = Continuation(
+        suspendActionId = "modification",
+        inputs = listOf(ContinuationParameter("suspend_input", "/tmp/input-1.txt", Argument.Type.INPUT)),
+        outputs = listOf(ContinuationParameter("new_input", null, Argument.Type.OUTPUT))
+    )
+    val c2 = Continuation(
+        suspendActionId = "modification",
+        inputs = listOf(ContinuationParameter("suspend_input", "/tmp/input-2.txt", Argument.Type.INPUT)),
+        outputs = listOf(ContinuationParameter("new_input", null, Argument.Type.OUTPUT))
+    )
+    val c3 = Continuation(
+        suspendActionId = "modification2",
+        inputs = listOf(ContinuationParameter("suspend_input", "/tmp/input-2.txt", Argument.Type.INPUT)),
+        outputs = listOf(ContinuationParameter("new_input", null, Argument.Type.OUTPUT))
+    )
+
+    coEvery { submissionRegistry.findContinuations(null, null, 10, 0, -1) } returns
+        listOf(c1 to s1.id, c2 to s2.id, c3 to s2.id)
+    coEvery { submissionRegistry.countContinuations(null, null) } returns 3
+    coEvery { submissionRegistry.getContinuationStatus(c1.id) } returns
+        SubmissionRegistry.ContinuationStatus.REGISTERED
+    coEvery { submissionRegistry.getContinuationStatus(c2.id) } returns
+        SubmissionRegistry.ContinuationStatus.PROCESSED
+    coEvery { submissionRegistry.getContinuationStatus(c3.id) } returns
+        SubmissionRegistry.ContinuationStatus.REGISTERED
+    coEvery { submissionRegistry.getContinuationResults(c1.id) } returns null
+    coEvery { submissionRegistry.getContinuationResults(c2.id) } returns mapOf(
+        "new_input" to listOf<Any>("/tmp/new-input.txt"))
+    coEvery { submissionRegistry.getContinuationResults(c3.id) } returns null
+
+    coEvery { submissionRegistry.findContinuations(s1.id,
+        null, 10, 0, any()) } returns listOf(c1 to s1.id)
+    coEvery { submissionRegistry.countContinuations(s1.id, null) } returns 1
+    coEvery { submissionRegistry.countContinuations(s1.id, SubmissionRegistry.ContinuationStatus.REGISTERED) } returns 1
+
+    coEvery { submissionRegistry.findContinuations(s2.id,
+      null, 10, 0, any()) } returns listOf(c2 to s2.id, c3 to s2.id)
+    coEvery { submissionRegistry.findContinuations(s2.id,
+      null, 10, 1, any()) } returns listOf(c3 to s2.id)
+    coEvery { submissionRegistry.findContinuations(s2.id,
+      SubmissionRegistry.ContinuationStatus.REGISTERED, 10, 0, any()) } returns listOf(c3 to s2.id)
+    coEvery { submissionRegistry.countContinuations(s2.id, null) } returns 2
+    coEvery { submissionRegistry.countContinuations(s2.id, SubmissionRegistry.ContinuationStatus.REGISTERED) } returns 1
+
+    val expectedC1Response = JsonUtils.toJson(c1).also {
+      it.put("submissionId", s1.id)
+      it.put("status", SubmissionRegistry.ContinuationStatus.REGISTERED.toString())
+      it.put("results", null)
+    }
+    val expectedC2Response = JsonUtils.toJson(c2).also {
+      it.put("submissionId", s2.id)
+      it.put("status", SubmissionRegistry.ContinuationStatus.PROCESSED.toString())
+      it.put("results", jsonObjectOf("new_input" to jsonArrayOf("/tmp/new-input.txt")))
+    }
+    val expectedC3Response = JsonUtils.toJson(c3).also {
+      it.put("submissionId", s2.id)
+      it.put("status", SubmissionRegistry.ContinuationStatus.REGISTERED.toString())
+      it.put("results", null)
+    }
+
+    val client = WebClient.create(vertx)
+    CoroutineScope(vertx.dispatcher()).launch {
+      ctx.coVerify {
+        client.get(port, "localhost", "/continuations?status=INVALID")
+            .`as`(BodyCodec.none())
+            .expect(ResponsePredicate.SC_BAD_REQUEST)
+            .send()
+            .coAwait()
+
+        val response1 = client.get(port, "localhost", "/continuations")
+            .`as`(BodyCodec.jsonArray())
+            .expect(ResponsePredicate.SC_OK)
+            .expect(ResponsePredicate.JSON)
+            .send()
+            .coAwait()
+        assertThat(response1.headers()["x-page-offset"]).isEqualTo("0")
+        assertThat(response1.headers()["x-page-total"]).isEqualTo("3")
+        assertThat(response1.body()).isEqualTo(jsonArrayOf(
+          expectedC1Response, expectedC2Response, expectedC3Response
+        ))
+
+        val response2 = client.get(port, "localhost",
+            "/continuations?submissionId=${s1.id}")
+            .`as`(BodyCodec.jsonArray())
+            .expect(ResponsePredicate.SC_OK)
+            .expect(ResponsePredicate.JSON)
+            .send()
+            .coAwait()
+        assertThat(response2.headers()["x-page-offset"]).isEqualTo("0")
+        assertThat(response2.headers()["x-page-total"]).isEqualTo("1")
+        assertThat(response2.body()).isEqualTo(jsonArrayOf(
+          expectedC1Response
+        ))
+
+        val response3 = client.get(port, "localhost",
+          "/continuations?submissionId=${s2.id}")
+          .`as`(BodyCodec.jsonArray())
+          .expect(ResponsePredicate.SC_OK)
+          .expect(ResponsePredicate.JSON)
+          .send()
+          .coAwait()
+        assertThat(response3.headers()["x-page-offset"]).isEqualTo("0")
+        assertThat(response3.headers()["x-page-total"]).isEqualTo("2")
+        assertThat(response3.body()).isEqualTo(jsonArrayOf(
+          expectedC2Response, expectedC3Response
+        ))
+
+        val response4 = client.get(port, "localhost",
+          "/continuations?submissionId=${s2.id}&offset=1")
+          .`as`(BodyCodec.jsonArray())
+          .expect(ResponsePredicate.SC_OK)
+          .expect(ResponsePredicate.JSON)
+          .send()
+          .coAwait()
+        assertThat(response4.headers()["x-page-offset"]).isEqualTo("1")
+        assertThat(response4.headers()["x-page-total"]).isEqualTo("2")
+        assertThat(response4.body()).isEqualTo(jsonArrayOf(
+          expectedC3Response
+        ))
+
+        val response5 = client.get(port, "localhost",
+          "/continuations?submissionId=${s2.id}&status=REGISTERED")
+          .`as`(BodyCodec.jsonArray())
+          .expect(ResponsePredicate.SC_OK)
+          .expect(ResponsePredicate.JSON)
+          .send()
+          .coAwait()
+        assertThat(response5.headers()["x-page-offset"]).isEqualTo("0")
+        assertThat(response5.headers()["x-page-total"]).isEqualTo("1")
+        assertThat(response5.body()).isEqualTo(jsonArrayOf(
+          expectedC3Response
+        ))
+      }
+      ctx.completeNow()
+    }
+  }
+
+  /**
+   * Test if continuations can be updated
+   */
+  @Test
+  fun putContinuationById(vertx: Vertx, ctx: VertxTestContext) {
+    val submissionId = UniqueID.next()
+    val c1 = Continuation(
+        suspendActionId = "modification",
+        inputs = listOf(ContinuationParameter("suspend_input", "/tmp/input-1.txt", Argument.Type.INPUT)),
+        outputs = listOf(ContinuationParameter("new_input", null, Argument.Type.OUTPUT))
+    )
+    val c2 = Continuation(
+        suspendActionId = "modification",
+        inputs = listOf(ContinuationParameter("suspend_input", "/tmp/input-2.txt", Argument.Type.INPUT)),
+        outputs = listOf(ContinuationParameter("new_input", null, Argument.Type.OUTPUT))
+    )
+
+    val continuationStatuses = mutableMapOf(
+        c1.id to SubmissionRegistry.ContinuationStatus.REGISTERED,
+        c2.id to SubmissionRegistry.ContinuationStatus.PROCESSED
+    )
+    val continuationResults = mutableMapOf(
+        c1.id to null,
+        c2.id to mapOf("new_input" to listOf<Any>("/tmp/already-set.txt"))
+    )
+
+    coEvery { submissionRegistry.findContinuationById(c1.id) } returns c1
+    coEvery { submissionRegistry.findContinuationById(c2.id) } returns c2
+    coEvery { submissionRegistry.findContinuationById("UNKNOWN") } returns null
+    coEvery { submissionRegistry.getContinuationSubmissionId(c1.id) } returns submissionId
+    coEvery { submissionRegistry.getContinuationSubmissionId(c2.id) } returns submissionId
+
+    coEvery { submissionRegistry.getContinuationStatus(any()) } answers {
+      continuationStatuses[firstArg<String>()]
+          ?: throw IllegalStateException("Unknown continuation ID")
+    }
+    coEvery { submissionRegistry.setContinuationStatus(any(), any()) } answers {
+      continuationStatuses[firstArg()] = secondArg()
+    }
+
+    coEvery { submissionRegistry.getContinuationResults(any()) } answers {
+      continuationResults[firstArg<String>()]
+    }
+    coEvery { submissionRegistry.setContinuationResults(any(), any()) } answers {
+      continuationResults[firstArg()] = secondArg<Map<String, List<Any>>?>()
+    }
+
+    val client = WebClient.create(vertx)
+    CoroutineScope(vertx.dispatcher()).launch {
+      ctx.coVerify {
+        val validUpdateBody = jsonObjectOf(
+            "status" to SubmissionRegistry.ContinuationStatus.PROCESSED.toString(),
+            "results" to jsonObjectOf("new_input" to jsonArrayOf("/tmp/new-value.txt"))
+        )
+        val missingBody = jsonObjectOf("foo" to "bar")
+        val invalidResult = jsonObjectOf("results" to jsonArrayOf("invalid"))
+        val invalidResultVariableValue = jsonObjectOf("results" to jsonObjectOf("new_input" to "invalid"))
+        val invalidStatusInteger = jsonObjectOf("status" to 42)
+        val invalidStatusString = jsonObjectOf("status" to "INVALID")
+        val invalidResultVariableName = jsonObjectOf("results" to jsonObjectOf("wrong_output" to jsonArrayOf("x")))
+        val invalidResultMissingVariable = jsonObjectOf("results" to jsonObjectOf())
+
+        // invalid requests
+        client.put(port, "localhost", "/continuations/${c1.id}")
+            .`as`(BodyCodec.none())
+            .expect(ResponsePredicate.SC_BAD_REQUEST)
+            .send()
+            .coAwait()
+
+        client.put(port, "localhost", "/continuations/${c1.id}")
+            .`as`(BodyCodec.none())
+            .expect(ResponsePredicate.SC_BAD_REQUEST)
+            .sendBuffer(Buffer.buffer("INVALID BODY"))
+            .coAwait()
+
+        client.put(port, "localhost", "/continuations/${c1.id}")
+            .`as`(BodyCodec.none())
+            .expect(ResponsePredicate.SC_BAD_REQUEST)
+            .sendJsonObject(missingBody)
+            .coAwait()
+
+        client.put(port, "localhost", "/continuations/${c1.id}")
+            .`as`(BodyCodec.none())
+            .expect(ResponsePredicate.SC_BAD_REQUEST)
+            .sendJsonObject(invalidResult)
+            .coAwait()
+
+        client.put(port, "localhost", "/continuations/${c1.id}")
+            .`as`(BodyCodec.none())
+            .expect(ResponsePredicate.SC_BAD_REQUEST)
+            .sendJsonObject(invalidResultVariableValue)
+            .coAwait()
+
+        client.put(port, "localhost", "/continuations/${c1.id}")
+            .`as`(BodyCodec.none())
+            .expect(ResponsePredicate.SC_BAD_REQUEST)
+            .sendJsonObject(invalidStatusInteger)
+            .coAwait()
+
+        client.put(port, "localhost", "/continuations/${c1.id}")
+            .`as`(BodyCodec.none())
+            .expect(ResponsePredicate.SC_BAD_REQUEST)
+            .sendJsonObject(invalidStatusString)
+            .coAwait()
+
+        client.put(port, "localhost", "/continuations/UNKNOWN")
+            .`as`(BodyCodec.none())
+            .expect(ResponsePredicate.SC_NOT_FOUND)
+            .sendJsonObject(validUpdateBody)
+            .coAwait()
+
+        // finished continuation cannot be changed
+        client.put(port, "localhost", "/continuations/${c2.id}")
+            .`as`(BodyCodec.none())
+            .expect(ResponsePredicate.SC_UNPROCESSABLE_ENTITY)
+            .sendJsonObject(jsonObjectOf("status" to SubmissionRegistry.ContinuationStatus.CANCELLED.toString()))
+            .coAwait()
+
+        client.put(port, "localhost", "/continuations/${c2.id}")
+            .`as`(BodyCodec.none())
+            .expect(ResponsePredicate.SC_UNPROCESSABLE_ENTITY)
+            .sendJsonObject(jsonObjectOf("results" to jsonObjectOf("new_input" to jsonArrayOf("/tmp/new.txt"))))
+            .coAwait()
+
+        // invalid result payload for open continuation
+        client.put(port, "localhost", "/continuations/${c1.id}")
+            .`as`(BodyCodec.none())
+            .expect(ResponsePredicate.SC_UNPROCESSABLE_ENTITY)
+            .sendJsonObject(invalidResultVariableName)
+            .coAwait()
+
+        client.put(port, "localhost", "/continuations/${c1.id}")
+            .`as`(BodyCodec.none())
+            .expect(ResponsePredicate.SC_UNPROCESSABLE_ENTITY)
+            .sendJsonObject(invalidResultMissingVariable)
+            .coAwait()
+
+        // valid update
+        val response = client.put(port, "localhost", "/continuations/${c1.id}")
+            .`as`(BodyCodec.jsonObject())
+            .expect(ResponsePredicate.SC_OK)
+            .expect(ResponsePredicate.JSON)
+            .sendJsonObject(validUpdateBody)
+            .coAwait()
+
+        assertThat(response.body()).isEqualTo(JsonUtils.toJson(c1).also {
+          it.put("submissionId", submissionId)
+          it.put("status", SubmissionRegistry.ContinuationStatus.PROCESSED.toString())
+          it.put("results", jsonObjectOf("new_input" to jsonArrayOf("/tmp/new-value.txt")))
+        })
+
+        coVerify(exactly = 1) {
+          submissionRegistry.setContinuationResults(c1.id,
+              mapOf("new_input" to listOf<Any>("/tmp/new-value.txt")))
+          submissionRegistry.setContinuationStatus(c1.id,
+              SubmissionRegistry.ContinuationStatus.PROCESSED)
+        }
       }
 
       ctx.completeNow()

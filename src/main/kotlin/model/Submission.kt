@@ -8,6 +8,7 @@ import model.workflow.Action
 import model.workflow.ExecuteAction
 import model.workflow.ForEachAction
 import model.workflow.IncludeAction
+import model.workflow.SuspendAction
 import model.workflow.Workflow
 import java.time.Instant
 
@@ -77,6 +78,11 @@ data class Submission(
             result.addAll(
                 collectRequiredCapabilities(m.actions, serviceMetadata, macros)
             )
+          }
+
+          is SuspendAction -> {
+            // Suspend actions are handled by Steep itself and do not require
+            // any special capabilities
           }
         }
       }
