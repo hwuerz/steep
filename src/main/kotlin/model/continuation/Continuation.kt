@@ -23,7 +23,7 @@ import java.time.Instant
 data class Continuation(
   val id: String = UniqueID.next(),
   val suspendActionId: String,
-  val status: Status = Status.REGISTERED,
+  val status: Status = Status.OPEN,
   val inputs: List<ContinuationParameter>,
   val outputs: List<ContinuationParameter>,
   val startTime: Instant = Instant.now(),
@@ -34,7 +34,7 @@ data class Continuation(
      * The continuation has been added to the registry.
      * It is waiting for user input.
      */
-    REGISTERED,
+    OPEN,
 
     /**
      * The continuation was processed. The user provided

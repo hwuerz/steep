@@ -590,7 +590,7 @@ interface SubmissionRegistry : Registry {
   /**
    * Query the continuations with the given [continuationIds] and return
    * status and results of those that are finished (i.e. not
-   * [Continuation.Status.REGISTERED])
+   * [Continuation.Status.OPEN])
    */
   suspend fun getContinuationStatusAndResultsIfFinished(continuationIds: Collection<String>):
       Map<String, Pair<Continuation.Status, Map<String, List<Any>>?>>

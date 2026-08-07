@@ -1405,7 +1405,7 @@ class HttpEndpoint : CoroutineVerticle() {
               SubmissionRegistry.ProcessChainStatus.PAUSED,
               SubmissionRegistry.ProcessChainStatus.CANCELLED)
           submissionRegistry.setAllContinuationsStatus(id,
-              Continuation.Status.REGISTERED,
+              Continuation.Status.OPEN,
               Continuation.Status.CANCELLED)
 
           // now cancel running process chains
@@ -2036,12 +2036,12 @@ class HttpEndpoint : CoroutineVerticle() {
       } else {
 
         val currentStatus = submissionRegistry.getContinuationStatus(id)
-        if (results != null && currentStatus != Continuation.Status.REGISTERED) {
+        if (results != null && currentStatus != Continuation.Status.OPEN) {
           // 422 Unprocessable Entity
           renderError(ctx, 422, "Cannot change results of a finished continuation. Current status: $currentStatus")
           return@launch
         }
-        if (status != null && currentStatus != Continuation.Status.REGISTERED) {
+        if (status != null && currentStatus != Continuation.Status.OPEN) {
           // 422 Unprocessable Entity
           renderError(ctx, 422, "Cannot change status of a finished continuation. Current status: $currentStatus")
           return@launch

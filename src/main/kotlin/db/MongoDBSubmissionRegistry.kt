@@ -1,7 +1,6 @@
 package db
 
 import com.fasterxml.jackson.annotation.JsonIgnore
-import com.fasterxml.jackson.module.kotlin.convertValue
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.mongodb.MongoGridFSException
 import com.mongodb.client.model.FindOneAndUpdateOptions
@@ -1123,7 +1122,7 @@ class MongoDBSubmissionRegistry(private val vertx: Vertx,
     continuationId: String,
     status: Continuation.Status
   ) {
-    if (status != Continuation.Status.REGISTERED) {
+    if (status != Continuation.Status.OPEN) {
       updateField(collContinuations, continuationId, END_TIME, instantToTimestamp(Instant.now()))
     }
     updateField(collContinuations, continuationId, STATUS, status.toString())
@@ -1141,7 +1140,7 @@ class MongoDBSubmissionRegistry(private val vertx: Vertx,
         "\$set" to jsonObjectOf(
             STATUS to newStatus.toString()
         ).apply {
-            if (newStatus != Continuation.Status.REGISTERED) {
+            if (newStatus != Continuation.Status.OPEN) {
                 put(END_TIME, instantToTimestamp(Instant.now()))
             }
         }
@@ -1169,7 +1168,7 @@ class MongoDBSubmissionRegistry(private val vertx: Vertx,
   override suspend fun getContinuationStatusAndResultsIfFinished(continuationIds: Collection<String>): Map<String, Pair<Continuation.Status, Map<String, List<Any>>?>> {
     val finished = collContinuations.findAwait(jsonObjectOf(
         STATUS to jsonObjectOf(
-            "\$ne" to Continuation.Status.REGISTERED.toString()
+            "\$ne" to Continuation.Status.OPEN.toString()
         ),
         INTERNAL_ID to jsonObjectOf(
             "\$in" to continuationIds.toList()
@@ -1181,7 +1180,7 @@ class MongoDBSubmissionRegistry(private val vertx: Vertx,
       Continuation.Status.valueOf(it.getString(STATUS)) })
 
     return finished.mapValues { f ->
-      val results = if (f.value != Continuation.Status.REGISTERED) {
+      val results = if (f.value != Continuation.Status.OPEN) {
         getContinuationResultsInternal(f.key)
       } else {
         null

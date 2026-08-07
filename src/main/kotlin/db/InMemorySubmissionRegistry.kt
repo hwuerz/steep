@@ -814,7 +814,7 @@ class InMemorySubmissionRegistry(private val vertx: Vertx) : SubmissionRegistry 
 
   private fun setContinuationEntryStatus(entry: ContinuationEntry, status: Continuation.Status): ContinuationEntry {
     return entry.copy(continuation =
-        if (status != Continuation.Status.REGISTERED) {
+        if (status != Continuation.Status.OPEN) {
           entry.continuation.copy(status = status, endTime = Instant.now())
         } else {
           entry.continuation.copy(status = status)
@@ -869,7 +869,7 @@ class InMemorySubmissionRegistry(private val vertx: Vertx) : SubmissionRegistry 
     return findContinuationEntries()
       .filter {
         ids.contains(it.continuation.id) &&
-              it.continuation.status != Continuation.Status.REGISTERED
+              it.continuation.status != Continuation.Status.OPEN
         }
         .associateBy({ it.continuation.id }, { it.continuation.status to it.results })
   }

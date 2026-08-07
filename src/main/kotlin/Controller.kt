@@ -331,7 +331,7 @@ class Controller(private val disablePeriodicLookupForSubmissions: Boolean = fals
             submission.id).map { it.first }
 
         continuationsToResume = submissionRegistry.findContinuations(
-            submission.id, Continuation.Status.REGISTERED)
+            submission.id, Continuation.Status.OPEN)
           .map { it.first }
       }
 
@@ -631,6 +631,6 @@ class Controller(private val disablePeriodicLookupForSubmissions: Boolean = fals
    * Cancel all continuations of the submission with the given [id]
    */
   private suspend fun cancelContinuationsOfSubmission(id: String) {
-    submissionRegistry.setAllContinuationsStatus(id, Continuation.Status.REGISTERED, Continuation.Status.CANCELLED)
+    submissionRegistry.setAllContinuationsStatus(id, Continuation.Status.OPEN, Continuation.Status.CANCELLED)
   }
 }

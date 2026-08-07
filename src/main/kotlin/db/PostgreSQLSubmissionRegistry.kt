@@ -831,7 +831,7 @@ class PostgreSQLSubmissionRegistry(private val vertx: Vertx, url: String,
   ) {
     updateProperties(CONTINUATIONS, continuationId, jsonObjectOf(STATUS to status.toString())
       .also {
-        if (status != Continuation.Status.REGISTERED) it.put(
+        if (status != Continuation.Status.OPEN) it.put(
           END_TIME, Instant.now().toString()
         )
       }
@@ -844,7 +844,7 @@ class PostgreSQLSubmissionRegistry(private val vertx: Vertx, url: String,
     newStatus: Continuation.Status
   ) {
     val newObj = jsonObjectOf(STATUS to newStatus.toString())
-    if (newStatus != Continuation.Status.REGISTERED) {
+    if (newStatus != Continuation.Status.OPEN) {
       newObj.put(END_TIME, Instant.now().toString())
     }
     val updateStatement = "UPDATE $CONTINUATIONS SET $DATA=$DATA || $1 WHERE " +
@@ -868,7 +868,7 @@ class PostgreSQLSubmissionRegistry(private val vertx: Vertx, url: String,
     val statement = "SELECT $ID, $DATA->'$STATUS', $RESULTS::varchar FROM $CONTINUATIONS " +
         "WHERE $DATA->'$STATUS'!=$1 AND $ID=ANY($2)"
     val params = Tuple.of(
-      Continuation.Status.REGISTERED.toString(),
+      Continuation.Status.OPEN.toString(),
       continuationIds.toTypedArray()
     )
     val rs = client.preparedQuery(statement).execute(params).coAwait()

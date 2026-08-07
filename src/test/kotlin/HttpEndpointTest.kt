@@ -1175,7 +1175,7 @@ class HttpEndpointTest {
         coEvery { submissionRegistry.setAllProcessChainsStatus(s1.id,
             ProcessChainStatus.PAUSED, ProcessChainStatus.CANCELLED) } just Runs
         coEvery { submissionRegistry.setAllContinuationsStatus(s1.id,
-            Continuation.Status.REGISTERED,
+            Continuation.Status.OPEN,
             Continuation.Status.CANCELLED) } just Runs
         coEvery { submissionRegistry.countProcessChainsPerStatus(s1.id) } returns mapOf(
             ProcessChainStatus.RUNNING to 1L,
@@ -2424,11 +2424,11 @@ class HttpEndpointTest {
         listOf(c1 to s1.id, c2 to s2.id, c3 to s2.id)
     coEvery { submissionRegistry.countContinuations(null, null) } returns 3
     coEvery { submissionRegistry.getContinuationStatus(c1.id) } returns
-        Continuation.Status.REGISTERED
+        Continuation.Status.OPEN
     coEvery { submissionRegistry.getContinuationStatus(c2.id) } returns
         Continuation.Status.PROCESSED
     coEvery { submissionRegistry.getContinuationStatus(c3.id) } returns
-        Continuation.Status.REGISTERED
+        Continuation.Status.OPEN
     coEvery { submissionRegistry.getContinuationResults(c1.id) } returns null
     coEvery { submissionRegistry.getContinuationResults(c2.id) } returns mapOf(
         "new_input" to listOf<Any>("/tmp/new-input.txt"))
@@ -2437,21 +2437,21 @@ class HttpEndpointTest {
     coEvery { submissionRegistry.findContinuations(s1.id,
         null, 10, 0, any()) } returns listOf(c1 to s1.id)
     coEvery { submissionRegistry.countContinuations(s1.id, null) } returns 1
-    coEvery { submissionRegistry.countContinuations(s1.id, Continuation.Status.REGISTERED) } returns 1
+    coEvery { submissionRegistry.countContinuations(s1.id, Continuation.Status.OPEN) } returns 1
 
     coEvery { submissionRegistry.findContinuations(s2.id,
       null, 10, 0, any()) } returns listOf(c2 to s2.id, c3 to s2.id)
     coEvery { submissionRegistry.findContinuations(s2.id,
       null, 10, 1, any()) } returns listOf(c3 to s2.id)
     coEvery { submissionRegistry.findContinuations(s2.id,
-      Continuation.Status.REGISTERED, 10, 0, any()) } returns listOf(c3 to s2.id)
+      Continuation.Status.OPEN, 10, 0, any()) } returns listOf(c3 to s2.id)
     coEvery { submissionRegistry.countContinuations(s2.id, null) } returns 2
-    coEvery { submissionRegistry.countContinuations(s2.id, Continuation.Status.REGISTERED) } returns 1
+    coEvery { submissionRegistry.countContinuations(s2.id, Continuation.Status.OPEN) } returns 1
 
     val expectedC1Response = JsonUtils.toJson(c1).also {
       it.put("submissionId", s1.id)
       it.put("startTime", c1.startTime)
-      it.put("status", Continuation.Status.REGISTERED.toString())
+      it.put("status", Continuation.Status.OPEN.toString())
       it.put("results", null)
     }
     val expectedC2Response = JsonUtils.toJson(c2).also {
@@ -2463,7 +2463,7 @@ class HttpEndpointTest {
     val expectedC3Response = JsonUtils.toJson(c3).also {
       it.put("submissionId", s2.id)
       it.put("startTime", c3.startTime)
-      it.put("status", Continuation.Status.REGISTERED.toString())
+      it.put("status", Continuation.Status.OPEN.toString())
       it.put("results", null)
     }
 
@@ -2528,7 +2528,7 @@ class HttpEndpointTest {
         ))
 
         val response5 = client.get(port, "localhost",
-          "/continuations?submissionId=${s2.id}&status=REGISTERED")
+          "/continuations?submissionId=${s2.id}&status=OPEN")
           .`as`(BodyCodec.jsonArray())
           .expect(ResponsePredicate.SC_OK)
           .expect(ResponsePredicate.JSON)
@@ -2552,7 +2552,7 @@ class HttpEndpointTest {
     val submissionId = UniqueID.next()
     val c1 = Continuation(
         suspendActionId = "modification",
-        status = Continuation.Status.REGISTERED,
+        status = Continuation.Status.OPEN,
         inputs = listOf(ContinuationParameter("suspend_input", "/tmp/input-1.txt", Argument.Type.INPUT)),
         outputs = listOf(ContinuationParameter("new_input", null, Argument.Type.OUTPUT))
     )
