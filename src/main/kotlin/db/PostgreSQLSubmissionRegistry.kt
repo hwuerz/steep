@@ -3,7 +3,6 @@ package db
 import com.fasterxml.jackson.module.kotlin.convertValue
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.google.common.cache.CacheBuilder
-import db.SubmissionRegistry.ContinuationStatus
 import db.SubmissionRegistry.ProcessChainStatus
 import helper.JsonUtils
 import helper.UniqueID
@@ -54,7 +53,6 @@ class PostgreSQLSubmissionRegistry(private val vertx: Vertx, url: String,
     private const val PROCESS_CHAINS = "processchains"
     private const val CONTINUATIONS = "continuations"
     private const val SUBMISSION_ID = "submissionId"
-    private const val SUSPEND_ACTION_ID = "suspendActionId"
     private const val START_TIME = "startTime"
     private const val END_TIME = "endTime"
     private const val STATUS = "status"
@@ -719,16 +717,15 @@ class PostgreSQLSubmissionRegistry(private val vertx: Vertx, url: String,
     })
   }
 
-  override suspend fun addContinuations(continuations: Collection<Continuation>,
-    submissionId: String, status: ContinuationStatus) {
+  override suspend fun addContinuations(continuations: Collection<Continuation>, submissionId: String) {
     withConnection { connection ->
       connection.ensureSubmissionExists(submissionId)
 
-      val insertStatement = "INSERT INTO $CONTINUATIONS ($ID, $SUSPEND_ACTION_ID, $SUBMISSION_ID, $STATUS, $DATA) " +
-          "VALUES ($1, $2, $3, $4, $5)"
+      val insertStatement = "INSERT INTO $CONTINUATIONS ($ID, $SUBMISSION_ID, $DATA) " +
+          "VALUES ($1, $2, $3)"
       val insertParams = continuations.map {
         val obj = JsonUtils.toJson(it)
-        Tuple.of(it.id, it.suspendActionId, submissionId, status.toString(), obj)
+        Tuple.of(it.id, submissionId, obj)
       }
       connection.preparedQuery(insertStatement).executeBatch(insertParams).coAwait()
     }
@@ -736,7 +733,7 @@ class PostgreSQLSubmissionRegistry(private val vertx: Vertx, url: String,
 
   override suspend fun findContinuations(
     submissionId: String?,
-    status: ContinuationStatus?,
+    status: Continuation.Status?,
     size: Int,
     offset: Int,
     order: Int
@@ -748,13 +745,13 @@ class PostgreSQLSubmissionRegistry(private val vertx: Vertx, url: String,
     statement.append("SELECT $DATA::varchar, $SUBMISSION_ID FROM $CONTINUATIONS ")
 
     val params = if (submissionId != null && status != null) {
-      statement.append("WHERE $SUBMISSION_ID=$1 AND $STATUS=$2 ")
+      statement.append("WHERE $SUBMISSION_ID=$1 AND $DATA->'$STATUS'=$2 ")
       Tuple.of(submissionId, status.toString())
     } else if (submissionId != null) {
       statement.append("WHERE $SUBMISSION_ID=$1 ")
       Tuple.of(submissionId)
     } else if (status != null) {
-      statement.append("WHERE $STATUS=$1 ")
+      statement.append("WHERE $DATA->'$STATUS'=$1 ")
       Tuple.of(status.toString())
     } else {
       null
@@ -779,7 +776,7 @@ class PostgreSQLSubmissionRegistry(private val vertx: Vertx, url: String,
 
   override suspend fun countContinuations(
     submissionId: String?,
-    status: ContinuationStatus?
+    status: Continuation.Status?
   ): Long {
     val statement = StringBuilder()
     statement.append("SELECT COUNT(*) FROM $CONTINUATIONS")
@@ -795,7 +792,7 @@ class PostgreSQLSubmissionRegistry(private val vertx: Vertx, url: String,
       } else {
         statement.append(" AND ")
       }
-      statement.append("$STATUS=$${params.size() + 1}")
+      statement.append("$DATA->'$STATUS'=$${params.size() + 1}")
       params.addString(status.toString())
     }
 
@@ -820,25 +817,39 @@ class PostgreSQLSubmissionRegistry(private val vertx: Vertx, url: String,
     return block(r)
   }
 
-  override suspend fun getContinuationStatus(continuationId: String): ContinuationStatus =
-    getContinuationColumn(continuationId, STATUS) { r ->
-      r.getString(0).let { ContinuationStatus.valueOf(it) } }
+  override suspend fun getContinuationStatus(continuationId: String): Continuation.Status {
+    val statement = "SELECT $DATA->'$STATUS' FROM $CONTINUATIONS WHERE $ID=$1"
+    val params = Tuple.of(continuationId)
+    val rs = client.preparedQuery(statement).execute(params).coAwait()?.firstOrNull()
+        ?: throw NoSuchElementException("There is no continuation with ID `$continuationId'")
+    return Continuation.Status.valueOf(rs.getString(0))
+  }
 
   override suspend fun setContinuationStatus(
     continuationId: String,
-    status: ContinuationStatus
+    status: Continuation.Status
   ) {
-    updateColumn(CONTINUATIONS, continuationId, STATUS, status.toString())
+    updateProperties(CONTINUATIONS, continuationId, jsonObjectOf(STATUS to status.toString())
+      .also {
+        if (status != Continuation.Status.REGISTERED) it.put(
+          END_TIME, Instant.now().toString()
+        )
+      }
+    )
   }
 
   override suspend fun setAllContinuationsStatus(
     submissionId: String,
-    currentStatus: ContinuationStatus,
-    newStatus: ContinuationStatus
+    currentStatus: Continuation.Status,
+    newStatus: Continuation.Status
   ) {
-    val updateStatement = "UPDATE $CONTINUATIONS SET $STATUS=$1 WHERE " +
-        "$SUBMISSION_ID=$2 AND $STATUS=$3"
-    val updateParams = Tuple.of(newStatus.toString(), submissionId, currentStatus.toString())
+    val newObj = jsonObjectOf(STATUS to newStatus.toString())
+    if (newStatus != Continuation.Status.REGISTERED) {
+      newObj.put(END_TIME, Instant.now().toString())
+    }
+    val updateStatement = "UPDATE $CONTINUATIONS SET $DATA=$DATA || $1 WHERE " +
+        "$SUBMISSION_ID=$2 AND $DATA->'$STATUS'=$3"
+    val updateParams = Tuple.of(newObj, submissionId, currentStatus.toString())
     client.preparedQuery(updateStatement).execute(updateParams).coAwait()
   }
 
@@ -850,21 +861,19 @@ class PostgreSQLSubmissionRegistry(private val vertx: Vertx, url: String,
     continuationId: String,
     results: Map<String, List<Any>>?
   ) {
-
-    // TODO Ensure that only results
     updateColumn(CONTINUATIONS, continuationId, RESULTS, results?.let { JsonUtils.toJson(it) })
   }
 
-  override suspend fun getContinuationStatusAndResultsIfFinished(continuationIds: Collection<String>): Map<String, Pair<ContinuationStatus, Map<String, List<Any>>?>> {
-    val statement = "SELECT $ID, $STATUS, $RESULTS::varchar FROM $CONTINUATIONS " +
-        "WHERE $STATUS!=$1 AND $ID=ANY($2)"
+  override suspend fun getContinuationStatusAndResultsIfFinished(continuationIds: Collection<String>): Map<String, Pair<Continuation.Status, Map<String, List<Any>>?>> {
+    val statement = "SELECT $ID, $DATA->'$STATUS', $RESULTS::varchar FROM $CONTINUATIONS " +
+        "WHERE $DATA->'$STATUS'!=$1 AND $ID=ANY($2)"
     val params = Tuple.of(
-      ContinuationStatus.REGISTERED,
+      Continuation.Status.REGISTERED.toString(),
       continuationIds.toTypedArray()
     )
     val rs = client.preparedQuery(statement).execute(params).coAwait()
     return rs.associateBy({ it.getString(0) }, { row ->
-      val status = ContinuationStatus.valueOf(row.getString(1))
+      val status = Continuation.Status.valueOf(row.getString(1))
       val results = row.getString(2)?.let { JsonUtils.mapper.readValue<Map<String, List<Any>>>(it) }
       status to results
     })

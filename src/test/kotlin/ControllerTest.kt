@@ -7,7 +7,6 @@ import db.MetadataRegistryFactory
 import db.PluginRegistryFactory
 import db.SubmissionRegistry
 import db.SubmissionRegistry.ProcessChainStatus
-import db.SubmissionRegistry.ContinuationStatus
 import db.SubmissionRegistryFactory
 import helper.JsonUtils
 import helper.YamlUtils
@@ -786,7 +785,7 @@ class ControllerTest {
           // First poll: user has not answered yet
           emptyMap()
         } else {
-          mapOf(c.id to (ContinuationStatus.PROCESSED to mapOf(
+          mapOf(c.id to (Continuation.Status.PROCESSED to mapOf(
               "new_input" to listOf<Any>(continuationResultValue)
           )))
         }

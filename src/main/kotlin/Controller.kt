@@ -15,7 +15,6 @@ import db.MetadataRegistryFactory
 import db.PluginRegistry
 import db.PluginRegistryFactory
 import db.SubmissionRegistry
-import db.SubmissionRegistry.ContinuationStatus
 import db.SubmissionRegistry.ProcessChainStatus
 import db.SubmissionRegistryFactory
 import helper.JsonUtils
@@ -332,7 +331,7 @@ class Controller(private val disablePeriodicLookupForSubmissions: Boolean = fals
             submission.id).map { it.first }
 
         continuationsToResume = submissionRegistry.findContinuations(
-            submission.id, ContinuationStatus.REGISTERED)
+            submission.id, Continuation.Status.REGISTERED)
           .map { it.first }
       }
 
@@ -560,7 +559,7 @@ class Controller(private val disablePeriodicLookupForSubmissions: Boolean = fals
           val status = f.value.first
           val continuationResults = f.value.second
           when (status) {
-            ContinuationStatus.PROCESSED -> {
+            Continuation.Status.PROCESSED -> {
               if (continuationResults != null) {
                 if (collectTemporaryResults) {
                   results.putAll(continuationResults)
@@ -572,7 +571,7 @@ class Controller(private val disablePeriodicLookupForSubmissions: Boolean = fals
               finishedContinuations.add(continuationId)
             }
 
-            ContinuationStatus.CANCELLED -> {
+            Continuation.Status.CANCELLED -> {
               cancelled++
               finishedContinuations.add(continuationId)
             }
@@ -632,6 +631,6 @@ class Controller(private val disablePeriodicLookupForSubmissions: Boolean = fals
    * Cancel all continuations of the submission with the given [id]
    */
   private suspend fun cancelContinuationsOfSubmission(id: String) {
-    submissionRegistry.setAllContinuationsStatus(id, ContinuationStatus.REGISTERED, ContinuationStatus.CANCELLED)
+    submissionRegistry.setAllContinuationsStatus(id, Continuation.Status.REGISTERED, Continuation.Status.CANCELLED)
   }
 }

@@ -51,29 +51,6 @@ interface SubmissionRegistry : Registry {
   }
 
   /**
-   * The status of a continuation
-   */
-  enum class ContinuationStatus {
-    /**
-     * The continuation has been added to the registry.
-     * It is waiting for user input.
-     */
-    REGISTERED,
-
-    /**
-     * The continuation was processed. The user provided
-     * the required input.
-     */
-    PROCESSED,
-
-    /**
-     * The continuation was cancelled. There will be no
-     * input by the user.
-     */
-    CANCELLED,
-  }
-
-  /**
    * Add a submission to the registry
    * @param submission the submission to add
    */
@@ -522,11 +499,9 @@ interface SubmissionRegistry : Registry {
    * Add new continuations to a submission
    * @param continuations the continuations to add
    * @param submissionId the submission ID
-   * @param status the status of the continuations
    * @throws NoSuchElementException if there is no submission with the given ID
    */
-  suspend fun addContinuations(continuations: Collection<Continuation>,
-                               submissionId: String, status: ContinuationStatus = ContinuationStatus.REGISTERED)
+  suspend fun addContinuations(continuations: Collection<Continuation>, submissionId: String)
 
   /**
    * Get a list of all continuations in the registry
@@ -541,7 +516,7 @@ interface SubmissionRegistry : Registry {
    * @return all continuations and the ID of their respective submission
    */
   suspend fun findContinuations(submissionId: String? = null,
-                                status: ContinuationStatus? = null, size: Int = -1, offset: Int = 0,
+                                status: Continuation.Status? = null, size: Int = -1, offset: Int = 0,
                                 order: Int = 1): Collection<Pair<Continuation, String>>
 
   /**
@@ -559,7 +534,7 @@ interface SubmissionRegistry : Registry {
    * @return the number of continuations in the registry
    */
   suspend fun countContinuations(submissionId: String? = null,
-                                 status: ContinuationStatus? = null): Long
+                                 status: Continuation.Status? = null): Long
 
   /**
    * Get the ID of the submission the given continuation belongs to
@@ -575,14 +550,14 @@ interface SubmissionRegistry : Registry {
    * @return the continuation status
    * @throws NoSuchElementException if the continuation does not exist
    */
-  suspend fun getContinuationStatus(continuationId: String): ContinuationStatus
+  suspend fun getContinuationStatus(continuationId: String): Continuation.Status
 
   /**
    * Set the status of a continuation
    * @param continuationId the continuation ID
    * @param status the new status
    */
-  suspend fun setContinuationStatus(continuationId: String, status: ContinuationStatus)
+  suspend fun setContinuationStatus(continuationId: String, status: Continuation.Status)
 
   /**
    * Find all continuations that belong to the submission with the given ID
@@ -592,7 +567,8 @@ interface SubmissionRegistry : Registry {
    * @param newStatus the new status
    */
   suspend fun setAllContinuationsStatus(submissionId: String,
-                                        currentStatus: ContinuationStatus, newStatus: ContinuationStatus)
+                                        currentStatus: Continuation.Status,
+                                        newStatus: Continuation.Status)
 
   /**
    * Get the results of a continuation.
@@ -614,10 +590,10 @@ interface SubmissionRegistry : Registry {
   /**
    * Query the continuations with the given [continuationIds] and return
    * status and results of those that are finished (i.e. not
-   * [ContinuationStatus.REGISTERED])
+   * [Continuation.Status.REGISTERED])
    */
   suspend fun getContinuationStatusAndResultsIfFinished(continuationIds: Collection<String>):
-      Map<String, Pair<ContinuationStatus, Map<String, List<Any>>?>>
+      Map<String, Pair<Continuation.Status, Map<String, List<Any>>?>>
 
   /**
    * Searches the registry to find objects that match the given [query].

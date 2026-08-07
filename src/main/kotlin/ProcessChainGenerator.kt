@@ -882,7 +882,8 @@ class ProcessChainGenerator(workflow: Workflow, private val tmpPath: String,
       ContinuationParameter(outputParameter.variable.id, null, OUTPUT)
     }
 
-    return Continuation(idGenerator.next(), action.id, inputParameters, outputParameters)
+    return Continuation(idGenerator.next(), suspendActionId = action.id,
+      inputs = inputParameters, outputs = outputParameters)
   }
 
   /**

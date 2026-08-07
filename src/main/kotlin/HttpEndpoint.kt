@@ -97,6 +97,7 @@ import kotlinx.coroutines.launch
 import model.Submission
 import model.Version
 import model.cloud.VM
+import model.continuation.Continuation
 import model.workflow.Workflow
 import org.apache.commons.text.WordUtils
 import org.parboiled.errors.ParserRuntimeException
@@ -1404,8 +1405,8 @@ class HttpEndpoint : CoroutineVerticle() {
               SubmissionRegistry.ProcessChainStatus.PAUSED,
               SubmissionRegistry.ProcessChainStatus.CANCELLED)
           submissionRegistry.setAllContinuationsStatus(id,
-              SubmissionRegistry.ContinuationStatus.REGISTERED,
-              SubmissionRegistry.ContinuationStatus.CANCELLED)
+              Continuation.Status.REGISTERED,
+              Continuation.Status.CANCELLED)
 
           // now cancel running process chains
           val pcIds = submissionRegistry.findProcessChainIdsBySubmissionIdAndStatus(
@@ -1935,7 +1936,7 @@ class HttpEndpoint : CoroutineVerticle() {
 
         val status = ctx.request().getParam("status")?.let {
           try {
-            SubmissionRegistry.ContinuationStatus.valueOf(it)
+            Continuation.Status.valueOf(it)
           } catch (_: IllegalArgumentException) {
             renderError(ctx, 400, "Invalid status: $it")
             return@launch
@@ -2014,16 +2015,16 @@ class HttpEndpoint : CoroutineVerticle() {
 
     if (strStatus == null && results == null) {
       renderError(ctx, 400, "Missing properties. At least one of `status' " +
-          "and `results' required")
+          "or `results' is required")
       return
     }
 
     val status = strStatus?.let {
       try {
-        SubmissionRegistry.ContinuationStatus.valueOf(strStatus)
+        Continuation.Status.valueOf(strStatus)
       } catch (_: IllegalArgumentException) {
         renderError(ctx, 400, "Invalid `status' property $strStatus Must be one of " +
-            SubmissionRegistry.ContinuationStatus.entries.joinToString(", ") { it.toString() })
+            Continuation.Status.entries.joinToString(", ") { it.toString() })
         return
       }
     }
@@ -2035,12 +2036,12 @@ class HttpEndpoint : CoroutineVerticle() {
       } else {
 
         val currentStatus = submissionRegistry.getContinuationStatus(id)
-        if (results != null && currentStatus != SubmissionRegistry.ContinuationStatus.REGISTERED) {
+        if (results != null && currentStatus != Continuation.Status.REGISTERED) {
           // 422 Unprocessable Entity
           renderError(ctx, 422, "Cannot change results of a finished continuation. Current status: $currentStatus")
           return@launch
         }
-        if (status != null && currentStatus != SubmissionRegistry.ContinuationStatus.REGISTERED) {
+        if (status != null && currentStatus != Continuation.Status.REGISTERED) {
           // 422 Unprocessable Entity
           renderError(ctx, 422, "Cannot change status of a finished continuation. Current status: $currentStatus")
           return@launch

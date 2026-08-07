@@ -93,7 +93,6 @@ class MongoDBSubmissionRegistry(private val vertx: Vertx,
     private const val ERROR_MESSAGE = "errorMessage"
     private const val AUTO_RESUME_AFTER = "autoResumeAfter"
     private const val RESULTS = "results"
-    private const val SUSPEND_ACTION_ID = "suspendActionId"
     private const val SEQUENCE = "sequence"
     private const val PRIORITY = "priority"
     private const val RUNS = "runs"
@@ -195,7 +194,6 @@ class MongoDBSubmissionRegistry(private val vertx: Vertx,
           IndexModel(Indexes.ascending(SUBMISSION_ID), IndexOptions().background(true)),
           IndexModel(Indexes.ascending(STATUS), IndexOptions().background(true)),
           IndexModel(Indexes.ascending(SEQUENCE), IndexOptions().background(true)),
-          IndexModel(Indexes.ascending(SUSPEND_ACTION_ID), IndexOptions().background(true))
       )).subscribe(object : DefaultSubscriber<String>() {
         override fun onError(t: Throwable) {
           log.error("Could not create index on collection `$COLL_CONTINUATIONS'", t)
@@ -1032,17 +1030,17 @@ class MongoDBSubmissionRegistry(private val vertx: Vertx,
   private suspend fun readContinuation(document: JsonObject): Pair<Continuation, String> {
     val submissionId = document.getString(SUBMISSION_ID, "")
     val id = document.getString(INTERNAL_ID)
+    val status = Continuation.Status.valueOf(document.getString(STATUS))
+    val endTime = document.getJsonObject(END_TIME)?.let { timestampToInstant(it) }
     val buf = readGridFSDocument(bucketContinuations, id)
       ?: throw IllegalStateException("Got continuation metadata with " +
           "ID `$id' but could not find corresponding object in GridFS bucket.")
-    return Pair(JsonUtils.mapper.readValue<Continuation>(buf.bytes), submissionId)
+    return Pair(JsonUtils.mapper.readValue<Continuation>(buf.bytes)
+        .copy(status = status, endTime = endTime), submissionId
+    )
   }
 
-  override suspend fun addContinuations(
-    continuations: Collection<Continuation>,
-    submissionId: String,
-    status: SubmissionRegistry.ContinuationStatus
-  ) {
+  override suspend fun addContinuations(continuations: Collection<Continuation>, submissionId: String) {
     val submissionCount = collSubmissions.countDocumentsAwait(jsonObjectOf(
         INTERNAL_ID to submissionId
     ))
@@ -1052,13 +1050,13 @@ class MongoDBSubmissionRegistry(private val vertx: Vertx,
 
     val sequence = getNextSequence(COLL_CONTINUATIONS, continuations.size)
     val requests = continuations.mapIndexed { i, c ->
-      writeGridFSDocument(bucketContinuations, c.id, JsonUtils.toJson(c))
+      // Remove the status since it will be stored separately.
+      writeGridFSDocument(bucketContinuations, c.id, JsonUtils.toJson(c).also { it.remove(STATUS) })
       val doc = jsonObjectOf(
         INTERNAL_ID to c.id,
         SEQUENCE to sequence + i,
         SUBMISSION_ID to submissionId,
-        STATUS to status.toString(),
-        SUSPEND_ACTION_ID to c.suspendActionId
+        STATUS to c.status.toString()
       )
       InsertOneModel(doc)
     }
@@ -1073,7 +1071,7 @@ class MongoDBSubmissionRegistry(private val vertx: Vertx,
 
   override suspend fun findContinuations(
     submissionId: String?,
-    status: SubmissionRegistry.ContinuationStatus?,
+    status: Continuation.Status?,
     size: Int,
     offset: Int,
     order: Int
@@ -1091,14 +1089,15 @@ class MongoDBSubmissionRegistry(private val vertx: Vertx,
   }
 
   override suspend fun findContinuationById(continuationId: String): Continuation? {
-    return readGridFSDocument(bucketContinuations, continuationId)?.let {
-      JsonUtils.mapper.readValue(it.bytes)
-    }
+    val doc = collContinuations.findOneAwait(jsonObjectOf(
+        INTERNAL_ID to continuationId
+    ))
+    return doc?.let { readContinuation(it).first }
   }
 
   override suspend fun countContinuations(
     submissionId: String?,
-    status: SubmissionRegistry.ContinuationStatus?
+    status: Continuation.Status?
   ): Long {
     return collContinuations.countDocumentsAwait(JsonObject().also {
       if (submissionId != null) {
@@ -1114,23 +1113,26 @@ class MongoDBSubmissionRegistry(private val vertx: Vertx,
     return getField(collContinuations, "continuation", continuationId, SUBMISSION_ID)
   }
 
-  override suspend fun getContinuationStatus(continuationId: String): SubmissionRegistry.ContinuationStatus {
+  override suspend fun getContinuationStatus(continuationId: String): Continuation.Status {
     return getField<String>(collContinuations, "continuation", continuationId, STATUS).let {
-      SubmissionRegistry.ContinuationStatus.valueOf(it)
+      Continuation.Status.valueOf(it)
     }
   }
 
   override suspend fun setContinuationStatus(
     continuationId: String,
-    status: SubmissionRegistry.ContinuationStatus
+    status: Continuation.Status
   ) {
+    if (status != Continuation.Status.REGISTERED) {
+      updateField(collContinuations, continuationId, END_TIME, instantToTimestamp(Instant.now()))
+    }
     updateField(collContinuations, continuationId, STATUS, status.toString())
   }
 
   override suspend fun setAllContinuationsStatus(
     submissionId: String,
-    currentStatus: SubmissionRegistry.ContinuationStatus,
-    newStatus: SubmissionRegistry.ContinuationStatus
+    currentStatus: Continuation.Status,
+    newStatus: Continuation.Status
   ) {
     collContinuations.updateManyAwait(jsonObjectOf(
         SUBMISSION_ID to submissionId,
@@ -1138,7 +1140,11 @@ class MongoDBSubmissionRegistry(private val vertx: Vertx,
     ), jsonObjectOf(
         "\$set" to jsonObjectOf(
             STATUS to newStatus.toString()
-        )
+        ).apply {
+            if (newStatus != Continuation.Status.REGISTERED) {
+                put(END_TIME, instantToTimestamp(Instant.now()))
+            }
+        }
     ))
   }
 
@@ -1160,10 +1166,10 @@ class MongoDBSubmissionRegistry(private val vertx: Vertx,
         results?.let { JsonObject(it) })
   }
 
-  override suspend fun getContinuationStatusAndResultsIfFinished(continuationIds: Collection<String>): Map<String, Pair<SubmissionRegistry.ContinuationStatus, Map<String, List<Any>>?>> {
+  override suspend fun getContinuationStatusAndResultsIfFinished(continuationIds: Collection<String>): Map<String, Pair<Continuation.Status, Map<String, List<Any>>?>> {
     val finished = collContinuations.findAwait(jsonObjectOf(
         STATUS to jsonObjectOf(
-            "\$ne" to SubmissionRegistry.ContinuationStatus.REGISTERED.toString()
+            "\$ne" to Continuation.Status.REGISTERED.toString()
         ),
         INTERNAL_ID to jsonObjectOf(
             "\$in" to continuationIds.toList()
@@ -1172,10 +1178,10 @@ class MongoDBSubmissionRegistry(private val vertx: Vertx,
         INTERNAL_ID to 1,
         STATUS to 1
     )).associateBy({ it.getString(INTERNAL_ID) }, {
-      SubmissionRegistry.ContinuationStatus.valueOf(it.getString(STATUS)) })
+      Continuation.Status.valueOf(it.getString(STATUS)) })
 
     return finished.mapValues { f ->
-      val results = if (f.value != SubmissionRegistry.ContinuationStatus.REGISTERED) {
+      val results = if (f.value != Continuation.Status.REGISTERED) {
         getContinuationResultsInternal(f.key)
       } else {
         null

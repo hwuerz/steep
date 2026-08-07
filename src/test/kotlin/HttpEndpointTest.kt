@@ -1175,8 +1175,8 @@ class HttpEndpointTest {
         coEvery { submissionRegistry.setAllProcessChainsStatus(s1.id,
             ProcessChainStatus.PAUSED, ProcessChainStatus.CANCELLED) } just Runs
         coEvery { submissionRegistry.setAllContinuationsStatus(s1.id,
-            SubmissionRegistry.ContinuationStatus.REGISTERED,
-            SubmissionRegistry.ContinuationStatus.CANCELLED) } just Runs
+            Continuation.Status.REGISTERED,
+            Continuation.Status.CANCELLED) } just Runs
         coEvery { submissionRegistry.countProcessChainsPerStatus(s1.id) } returns mapOf(
             ProcessChainStatus.RUNNING to 1L,
             ProcessChainStatus.CANCELLED to 2L
@@ -2424,11 +2424,11 @@ class HttpEndpointTest {
         listOf(c1 to s1.id, c2 to s2.id, c3 to s2.id)
     coEvery { submissionRegistry.countContinuations(null, null) } returns 3
     coEvery { submissionRegistry.getContinuationStatus(c1.id) } returns
-        SubmissionRegistry.ContinuationStatus.REGISTERED
+        Continuation.Status.REGISTERED
     coEvery { submissionRegistry.getContinuationStatus(c2.id) } returns
-        SubmissionRegistry.ContinuationStatus.PROCESSED
+        Continuation.Status.PROCESSED
     coEvery { submissionRegistry.getContinuationStatus(c3.id) } returns
-        SubmissionRegistry.ContinuationStatus.REGISTERED
+        Continuation.Status.REGISTERED
     coEvery { submissionRegistry.getContinuationResults(c1.id) } returns null
     coEvery { submissionRegistry.getContinuationResults(c2.id) } returns mapOf(
         "new_input" to listOf<Any>("/tmp/new-input.txt"))
@@ -2437,30 +2437,33 @@ class HttpEndpointTest {
     coEvery { submissionRegistry.findContinuations(s1.id,
         null, 10, 0, any()) } returns listOf(c1 to s1.id)
     coEvery { submissionRegistry.countContinuations(s1.id, null) } returns 1
-    coEvery { submissionRegistry.countContinuations(s1.id, SubmissionRegistry.ContinuationStatus.REGISTERED) } returns 1
+    coEvery { submissionRegistry.countContinuations(s1.id, Continuation.Status.REGISTERED) } returns 1
 
     coEvery { submissionRegistry.findContinuations(s2.id,
       null, 10, 0, any()) } returns listOf(c2 to s2.id, c3 to s2.id)
     coEvery { submissionRegistry.findContinuations(s2.id,
       null, 10, 1, any()) } returns listOf(c3 to s2.id)
     coEvery { submissionRegistry.findContinuations(s2.id,
-      SubmissionRegistry.ContinuationStatus.REGISTERED, 10, 0, any()) } returns listOf(c3 to s2.id)
+      Continuation.Status.REGISTERED, 10, 0, any()) } returns listOf(c3 to s2.id)
     coEvery { submissionRegistry.countContinuations(s2.id, null) } returns 2
-    coEvery { submissionRegistry.countContinuations(s2.id, SubmissionRegistry.ContinuationStatus.REGISTERED) } returns 1
+    coEvery { submissionRegistry.countContinuations(s2.id, Continuation.Status.REGISTERED) } returns 1
 
     val expectedC1Response = JsonUtils.toJson(c1).also {
       it.put("submissionId", s1.id)
-      it.put("status", SubmissionRegistry.ContinuationStatus.REGISTERED.toString())
+      it.put("startTime", c1.startTime)
+      it.put("status", Continuation.Status.REGISTERED.toString())
       it.put("results", null)
     }
     val expectedC2Response = JsonUtils.toJson(c2).also {
       it.put("submissionId", s2.id)
-      it.put("status", SubmissionRegistry.ContinuationStatus.PROCESSED.toString())
+      it.put("startTime", c2.startTime)
+      it.put("status", Continuation.Status.PROCESSED.toString())
       it.put("results", jsonObjectOf("new_input" to jsonArrayOf("/tmp/new-input.txt")))
     }
     val expectedC3Response = JsonUtils.toJson(c3).also {
       it.put("submissionId", s2.id)
-      it.put("status", SubmissionRegistry.ContinuationStatus.REGISTERED.toString())
+      it.put("startTime", c3.startTime)
+      it.put("status", Continuation.Status.REGISTERED.toString())
       it.put("results", null)
     }
 
@@ -2549,36 +2552,38 @@ class HttpEndpointTest {
     val submissionId = UniqueID.next()
     val c1 = Continuation(
         suspendActionId = "modification",
+        status = Continuation.Status.REGISTERED,
         inputs = listOf(ContinuationParameter("suspend_input", "/tmp/input-1.txt", Argument.Type.INPUT)),
         outputs = listOf(ContinuationParameter("new_input", null, Argument.Type.OUTPUT))
     )
     val c2 = Continuation(
         suspendActionId = "modification",
+        status = Continuation.Status.PROCESSED,
         inputs = listOf(ContinuationParameter("suspend_input", "/tmp/input-2.txt", Argument.Type.INPUT)),
         outputs = listOf(ContinuationParameter("new_input", null, Argument.Type.OUTPUT))
     )
+    val continuations = mutableMapOf(c1.id to c1, c2.id to c2)
 
-    val continuationStatuses = mutableMapOf(
-        c1.id to SubmissionRegistry.ContinuationStatus.REGISTERED,
-        c2.id to SubmissionRegistry.ContinuationStatus.PROCESSED
-    )
     val continuationResults = mutableMapOf(
         c1.id to null,
         c2.id to mapOf("new_input" to listOf<Any>("/tmp/already-set.txt"))
     )
 
-    coEvery { submissionRegistry.findContinuationById(c1.id) } returns c1
-    coEvery { submissionRegistry.findContinuationById(c2.id) } returns c2
-    coEvery { submissionRegistry.findContinuationById("UNKNOWN") } returns null
+    coEvery { submissionRegistry.findContinuationById(any()) } answers {
+      continuations[firstArg<String>()]
+    }
     coEvery { submissionRegistry.getContinuationSubmissionId(c1.id) } returns submissionId
     coEvery { submissionRegistry.getContinuationSubmissionId(c2.id) } returns submissionId
 
     coEvery { submissionRegistry.getContinuationStatus(any()) } answers {
-      continuationStatuses[firstArg<String>()]
+      continuations[firstArg<String>()]?.status
           ?: throw IllegalStateException("Unknown continuation ID")
     }
     coEvery { submissionRegistry.setContinuationStatus(any(), any()) } answers {
-      continuationStatuses[firstArg()] = secondArg()
+      continuations[firstArg<String>()] = continuations[firstArg<String>()]?.copy(
+          status = secondArg<Continuation.Status>(),
+          endTime = Instant.now()
+      )?: throw IllegalStateException("Unknown continuation ID")
     }
 
     coEvery { submissionRegistry.getContinuationResults(any()) } answers {
@@ -2592,7 +2597,7 @@ class HttpEndpointTest {
     CoroutineScope(vertx.dispatcher()).launch {
       ctx.coVerify {
         val validUpdateBody = jsonObjectOf(
-            "status" to SubmissionRegistry.ContinuationStatus.PROCESSED.toString(),
+            "status" to Continuation.Status.PROCESSED.toString(),
             "results" to jsonObjectOf("new_input" to jsonArrayOf("/tmp/new-value.txt"))
         )
         val missingBody = jsonObjectOf("foo" to "bar")
@@ -2656,7 +2661,7 @@ class HttpEndpointTest {
         client.put(port, "localhost", "/continuations/${c2.id}")
             .`as`(BodyCodec.none())
             .expect(ResponsePredicate.SC_UNPROCESSABLE_ENTITY)
-            .sendJsonObject(jsonObjectOf("status" to SubmissionRegistry.ContinuationStatus.CANCELLED.toString()))
+            .sendJsonObject(jsonObjectOf("status" to Continuation.Status.CANCELLED.toString()))
             .coAwait()
 
         client.put(port, "localhost", "/continuations/${c2.id}")
@@ -2688,7 +2693,8 @@ class HttpEndpointTest {
 
         assertThat(response.body()).isEqualTo(JsonUtils.toJson(c1).also {
           it.put("submissionId", submissionId)
-          it.put("status", SubmissionRegistry.ContinuationStatus.PROCESSED.toString())
+          it.put("status", Continuation.Status.PROCESSED.toString())
+          it.put("endTime", continuations[c1.id]!!.endTime)
           it.put("results", jsonObjectOf("new_input" to jsonArrayOf("/tmp/new-value.txt")))
         })
 
@@ -2696,7 +2702,7 @@ class HttpEndpointTest {
           submissionRegistry.setContinuationResults(c1.id,
               mapOf("new_input" to listOf<Any>("/tmp/new-value.txt")))
           submissionRegistry.setContinuationStatus(c1.id,
-              SubmissionRegistry.ContinuationStatus.PROCESSED)
+              Continuation.Status.PROCESSED)
         }
       }
 

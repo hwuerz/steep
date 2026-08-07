@@ -90,7 +90,6 @@ class InMemorySubmissionRegistry(private val vertx: Vertx) : SubmissionRegistry 
       val serial: Int,
       val continuation: Continuation,
       val submissionId: String,
-      val status: SubmissionRegistry.ContinuationStatus,
       val results: Map<String, List<Any>>? = null
   )
 
@@ -743,11 +742,7 @@ class InMemorySubmissionRegistry(private val vertx: Vertx) : SubmissionRegistry 
     }
   }
 
-  override suspend fun addContinuations(
-    continuations: Collection<Continuation>,
-    submissionId: String,
-    status: SubmissionRegistry.ContinuationStatus
-  ) {
+  override suspend fun addContinuations(continuations: Collection<Continuation>, submissionId: String) {
     val sharedData = vertx.sharedData()
     val submissionLock = sharedData.getLock(LOCK_SUBMISSIONS).coAwait()
     try {
@@ -761,8 +756,7 @@ class InMemorySubmissionRegistry(private val vertx: Vertx) : SubmissionRegistry 
           val e = ContinuationEntry(
               continuationEntryID.getAndIncrement(),
               continuation,
-              submissionId,
-              status
+              submissionId
           )
           registeredContinuations.put(continuation.id, JsonUtils.writeValueAsString(e)).coAwait()
         }
@@ -776,7 +770,7 @@ class InMemorySubmissionRegistry(private val vertx: Vertx) : SubmissionRegistry 
 
   override suspend fun findContinuations(
     submissionId: String?,
-    status: SubmissionRegistry.ContinuationStatus?,
+    status: Continuation.Status?,
     size: Int,
     offset: Int,
     order: Int
@@ -784,7 +778,7 @@ class InMemorySubmissionRegistry(private val vertx: Vertx) : SubmissionRegistry 
     return findContinuationEntries()
         .filter {
           (submissionId == null || it.submissionId == submissionId) &&
-              (status == null || it.status == status)
+              (status == null || it.continuation.status == status)
         }
         .let { if (order < 0) it.reversed() else it }
         .drop(offset)
@@ -800,12 +794,12 @@ class InMemorySubmissionRegistry(private val vertx: Vertx) : SubmissionRegistry 
 
   override suspend fun countContinuations(
     submissionId: String?,
-    status: SubmissionRegistry.ContinuationStatus?
+    status: Continuation.Status?
   ): Long {
     return findContinuationEntries()
         .count {
           (submissionId == null || it.submissionId == submissionId) &&
-              (status == null || it.status == status)
+              (status == null || it.continuation.status == status)
         }
         .toLong()
   }
@@ -814,21 +808,31 @@ class InMemorySubmissionRegistry(private val vertx: Vertx) : SubmissionRegistry 
     return getContinuationEntryById(continuationId).submissionId
   }
 
-  override suspend fun getContinuationStatus(continuationId: String): SubmissionRegistry.ContinuationStatus {
-    return getContinuationEntryById(continuationId).status
+  override suspend fun getContinuationStatus(continuationId: String): Continuation.Status {
+    return getContinuationEntryById(continuationId).continuation.status
+  }
+
+  private fun setContinuationEntryStatus(entry: ContinuationEntry, status: Continuation.Status): ContinuationEntry {
+    return entry.copy(continuation =
+        if (status != Continuation.Status.REGISTERED) {
+          entry.continuation.copy(status = status, endTime = Instant.now())
+        } else {
+          entry.continuation.copy(status = status)
+        }
+    )
   }
 
   override suspend fun setContinuationStatus(
     continuationId: String,
-    status: SubmissionRegistry.ContinuationStatus
-  ) {
-    updateContinuation(continuationId) { it.copy(status = status) }
+    status: Continuation.Status
+  ) = updateContinuation(continuationId) {
+      setContinuationEntryStatus(it, status)
   }
 
   override suspend fun setAllContinuationsStatus(
     submissionId: String,
-    currentStatus: SubmissionRegistry.ContinuationStatus,
-    newStatus: SubmissionRegistry.ContinuationStatus
+    currentStatus: Continuation.Status,
+    newStatus: Continuation.Status
   ) {
     val sharedData = vertx.sharedData()
     val lock = sharedData.getLock(LOCK_CONTINUATIONS).coAwait()
@@ -836,9 +840,9 @@ class InMemorySubmissionRegistry(private val vertx: Vertx) : SubmissionRegistry 
       val map = continuations.coAwait()
       awaitResult<List<String>> { map.values(it) }
         .map { JsonUtils.readValue<ContinuationEntry>(it) }
-        .filter { it.submissionId == submissionId && it.status == currentStatus }
+        .filter { it.submissionId == submissionId && it.continuation.status == currentStatus }
         .forEach { entry ->
-          val newEntry = entry.copy(status = newStatus)
+          val newEntry = setContinuationEntryStatus(entry, newStatus)
           map.put(entry.continuation.id,
             JsonUtils.writeValueAsString(newEntry)).coAwait()
         }
@@ -858,14 +862,16 @@ class InMemorySubmissionRegistry(private val vertx: Vertx) : SubmissionRegistry 
     updateContinuation(continuationId) { it.copy(results = results) }
   }
 
-  override suspend fun getContinuationStatusAndResultsIfFinished(continuationIds: Collection<String>): Map<String, Pair<SubmissionRegistry.ContinuationStatus, Map<String, List<Any>>?>> {
+  override suspend fun getContinuationStatusAndResultsIfFinished(
+    continuationIds: Collection<String>
+  ): Map<String, Pair<Continuation.Status, Map<String, List<Any>>?>> {
     val ids = continuationIds.toSet()
     return findContinuationEntries()
-        .filter {
-          ids.contains(it.continuation.id) &&
-              it.status != SubmissionRegistry.ContinuationStatus.REGISTERED
+      .filter {
+        ids.contains(it.continuation.id) &&
+              it.continuation.status != Continuation.Status.REGISTERED
         }
-        .associateBy({ it.continuation.id }, { it.status to it.results })
+        .associateBy({ it.continuation.id }, { it.continuation.status to it.results })
   }
 
 

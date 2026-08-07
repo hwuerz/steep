@@ -3496,29 +3496,27 @@ abstract class SubmissionRegistryTest {
   @Test
   fun findContinuationsBySubmissionIdAndStatus(vertx: Vertx, ctx: VertxTestContext) {
     val s1 = Submission(workflow = Workflow())
-    val c1 = Continuation(suspendActionId = "sa1", inputs = emptyList(), outputs = emptyList())
-    val c2 = Continuation(suspendActionId = "sa2", inputs = emptyList(), outputs = emptyList())
-    val c3 = Continuation(suspendActionId = "sa3", inputs = emptyList(), outputs = emptyList())
+    val c1 = Continuation(suspendActionId = "sa1", status = Continuation.Status.REGISTERED, inputs = emptyList(), outputs = emptyList())
+    val c2 = Continuation(suspendActionId = "sa2", status = Continuation.Status.REGISTERED, inputs = emptyList(), outputs = emptyList())
+    val c3 = Continuation(suspendActionId = "sa3", status = Continuation.Status.PROCESSED, inputs = emptyList(), outputs = emptyList())
     val s2 = Submission(workflow = Workflow())
-    val c4 = Continuation(suspendActionId = "sa4", inputs = emptyList(), outputs = emptyList())
+    val c4 = Continuation(suspendActionId = "sa4", status = Continuation.Status.REGISTERED, inputs = emptyList(), outputs = emptyList())
 
     CoroutineScope(vertx.dispatcher()).launch {
       submissionRegistry.addSubmission(s1)
       submissionRegistry.addSubmission(s2)
-      submissionRegistry.addContinuations(listOf(c1, c2), s1.id,
-        SubmissionRegistry.ContinuationStatus.REGISTERED)
-      submissionRegistry.addContinuations(listOf(c3), s1.id,
-        SubmissionRegistry.ContinuationStatus.PROCESSED)
+      submissionRegistry.addContinuations(listOf(c1, c2), s1.id)
+      submissionRegistry.addContinuations(listOf(c3), s1.id)
       submissionRegistry.addContinuations(listOf(c4), s2.id)
 
       val statuses0 = submissionRegistry.findContinuations(
-        s1.id, SubmissionRegistry.ContinuationStatus.REGISTERED)
+        s1.id, Continuation.Status.REGISTERED)
       val statuses1 = submissionRegistry.findContinuations(
-        s1.id, SubmissionRegistry.ContinuationStatus.PROCESSED)
+        s1.id, Continuation.Status.PROCESSED)
       val statuses2 = submissionRegistry.findContinuations(
-        s2.id, SubmissionRegistry.ContinuationStatus.REGISTERED)
+        s2.id, Continuation.Status.REGISTERED)
       val statuses3 = submissionRegistry.findContinuations(
-        s2.id, SubmissionRegistry.ContinuationStatus.PROCESSED)
+        s2.id, Continuation.Status.PROCESSED)
       ctx.verify {
         assertThat(statuses0).isEqualTo(listOf(c1 to s1.id, c2 to s1.id))
         assertThat(statuses1).isEqualTo(listOf(c3 to s1.id))
@@ -3527,19 +3525,19 @@ abstract class SubmissionRegistryTest {
       }
 
       val statuses4 = submissionRegistry.findContinuations(
-        s1.id, SubmissionRegistry.ContinuationStatus.REGISTERED, order = -1)
+        s1.id, Continuation.Status.REGISTERED, order = -1)
       ctx.verify {
         assertThat(statuses4).isEqualTo(listOf(c2 to s1.id, c1 to s1.id))
       }
 
       val statuses5 = submissionRegistry.findContinuations(
-        s1.id, SubmissionRegistry.ContinuationStatus.REGISTERED, size = 1)
+        s1.id, Continuation.Status.REGISTERED, size = 1)
       ctx.verify {
         assertThat(statuses5).isEqualTo(listOf(c1 to s1.id))
       }
 
       val statuses6 = submissionRegistry.findContinuations(
-        s1.id, SubmissionRegistry.ContinuationStatus.REGISTERED, size = 1, order = -1)
+        s1.id, Continuation.Status.REGISTERED, size = 1, order = -1)
       ctx.verify {
         assertThat(statuses6).isEqualTo(listOf(c2 to s1.id))
       }
@@ -3552,21 +3550,17 @@ abstract class SubmissionRegistryTest {
     CoroutineScope(vertx.dispatcher()).launch {
       val s1 = Submission(workflow = Workflow())
       val s2 = Submission(workflow = Workflow())
-      val c1 = Continuation(suspendActionId = "sa1", inputs = emptyList(), outputs = emptyList())
-      val c2 = Continuation(suspendActionId = "sa2", inputs = emptyList(), outputs = emptyList())
-      val c3 = Continuation(suspendActionId = "sa3", inputs = emptyList(), outputs = emptyList())
-      val c4 = Continuation(suspendActionId = "sa4", inputs = emptyList(), outputs = emptyList())
+      val c1 = Continuation(suspendActionId = "sa1", status = Continuation.Status.REGISTERED, inputs = emptyList(), outputs = emptyList())
+      val c2 = Continuation(suspendActionId = "sa2", status = Continuation.Status.PROCESSED, inputs = emptyList(), outputs = emptyList())
+      val c3 = Continuation(suspendActionId = "sa3", status = Continuation.Status.PROCESSED, inputs = emptyList(), outputs = emptyList())
+      val c4 = Continuation(suspendActionId = "sa4", status = Continuation.Status.REGISTERED, inputs = emptyList(), outputs = emptyList())
 
       submissionRegistry.addSubmission(s1)
       submissionRegistry.addSubmission(s2)
-      submissionRegistry.addContinuations(listOf(c1), s1.id,
-        SubmissionRegistry.ContinuationStatus.REGISTERED)
-      submissionRegistry.addContinuations(listOf(c2), s1.id,
-        SubmissionRegistry.ContinuationStatus.PROCESSED)
-      submissionRegistry.addContinuations(listOf(c3), s2.id,
-        SubmissionRegistry.ContinuationStatus.PROCESSED)
-      submissionRegistry.addContinuations(listOf(c4), s2.id,
-        SubmissionRegistry.ContinuationStatus.REGISTERED)
+      submissionRegistry.addContinuations(listOf(c1), s1.id)
+      submissionRegistry.addContinuations(listOf(c2), s1.id)
+      submissionRegistry.addContinuations(listOf(c3), s2.id)
+      submissionRegistry.addContinuations(listOf(c4), s2.id)
 
       ctx.coVerify {
         val r1 = submissionRegistry.getContinuationStatusAndResultsIfFinished(emptyList())
@@ -3577,28 +3571,28 @@ abstract class SubmissionRegistryTest {
 
         val r3 = submissionRegistry.getContinuationStatusAndResultsIfFinished(listOf(c2.id))
         assertThat(r3).isEqualTo(mapOf(
-          c2.id to (SubmissionRegistry.ContinuationStatus.PROCESSED to null)
+          c2.id to (Continuation.Status.PROCESSED to null)
         ))
 
         val r4 = submissionRegistry.getContinuationStatusAndResultsIfFinished(
           listOf(c2.id, c3.id))
         assertThat(r4).isEqualTo(mapOf(
-          c2.id to (SubmissionRegistry.ContinuationStatus.PROCESSED to null),
-          c3.id to (SubmissionRegistry.ContinuationStatus.PROCESSED to null)
+          c2.id to (Continuation.Status.PROCESSED to null),
+          c3.id to (Continuation.Status.PROCESSED to null)
         ))
 
         val r5 = submissionRegistry.getContinuationStatusAndResultsIfFinished(
           setOf(c2.id, c3.id))
         assertThat(r5).isEqualTo(mapOf(
-          c2.id to (SubmissionRegistry.ContinuationStatus.PROCESSED to null),
-          c3.id to (SubmissionRegistry.ContinuationStatus.PROCESSED to null)
+          c2.id to (Continuation.Status.PROCESSED to null),
+          c3.id to (Continuation.Status.PROCESSED to null)
         ))
 
         val r6 = submissionRegistry.getContinuationStatusAndResultsIfFinished(
           listOf(c1.id, c2.id, c3.id, c4.id))
         assertThat(r6).isEqualTo(mapOf(
-          c2.id to (SubmissionRegistry.ContinuationStatus.PROCESSED to null),
-          c3.id to (SubmissionRegistry.ContinuationStatus.PROCESSED to null)
+          c2.id to (Continuation.Status.PROCESSED to null),
+          c3.id to (Continuation.Status.PROCESSED to null)
         ))
       }
 
@@ -3642,14 +3636,20 @@ abstract class SubmissionRegistryTest {
       submissionRegistry.addContinuations(listOf(c), s.id)
 
       val status1 = submissionRegistry.getContinuationStatus(c.id)
+      val continuation1 = submissionRegistry.findContinuationById(c.id)
       ctx.verify {
-        assertThat(status1).isEqualTo(SubmissionRegistry.ContinuationStatus.REGISTERED)
+        assertThat(status1).isEqualTo(Continuation.Status.REGISTERED)
+        assertThat(continuation1?.status).isEqualTo(Continuation.Status.REGISTERED)
+        assertThat(continuation1?.endTime).isNull()
       }
 
-      submissionRegistry.setContinuationStatus(c.id, SubmissionRegistry.ContinuationStatus.PROCESSED)
+      submissionRegistry.setContinuationStatus(c.id, Continuation.Status.PROCESSED)
       val status2 = submissionRegistry.getContinuationStatus(c.id)
+      val continuation2 = submissionRegistry.findContinuationById(c.id)
       ctx.verify {
-        assertThat(status2).isEqualTo(SubmissionRegistry.ContinuationStatus.PROCESSED)
+        assertThat(status2).isEqualTo(Continuation.Status.PROCESSED)
+        assertThat(continuation2?.status).isEqualTo(Continuation.Status.PROCESSED)
+        assertThat(continuation2?.endTime).isNotNull()
       }
 
       ctx.completeNow()
@@ -3660,34 +3660,35 @@ abstract class SubmissionRegistryTest {
   fun setAllContinuationsStatus(vertx: Vertx, ctx: VertxTestContext) {
     val s1 = Submission(workflow = Workflow())
     val s2 = Submission(workflow = Workflow())
-    val c1 = Continuation(suspendActionId = "sa1", inputs = emptyList(), outputs = emptyList())
-    val c2 = Continuation(suspendActionId = "sa2", inputs = emptyList(), outputs = emptyList())
-    val c3 = Continuation(suspendActionId = "sa3", inputs = emptyList(), outputs = emptyList())
-    val c4 = Continuation(suspendActionId = "sa4", inputs = emptyList(), outputs = emptyList())
+    val c1 = Continuation(suspendActionId = "sa1", status = Continuation.Status.REGISTERED, inputs = emptyList(), outputs = emptyList())
+    val c2 = Continuation(suspendActionId = "sa2", status = Continuation.Status.REGISTERED, inputs = emptyList(), outputs = emptyList())
+    val c3 = Continuation(suspendActionId = "sa3", status = Continuation.Status.PROCESSED, inputs = emptyList(), outputs = emptyList(), endTime = Instant.now())
+    val c4 = Continuation(suspendActionId = "sa4", status = Continuation.Status.REGISTERED, inputs = emptyList(), outputs = emptyList())
 
     CoroutineScope(vertx.dispatcher()).launch {
       submissionRegistry.addSubmission(s1)
       submissionRegistry.addSubmission(s2)
-      submissionRegistry.addContinuations(listOf(c1, c2), s1.id,
-        SubmissionRegistry.ContinuationStatus.REGISTERED)
-      submissionRegistry.addContinuations(listOf(c3), s1.id,
-        SubmissionRegistry.ContinuationStatus.PROCESSED)
-      submissionRegistry.addContinuations(listOf(c4), s2.id,
-        SubmissionRegistry.ContinuationStatus.REGISTERED)
+      submissionRegistry.addContinuations(listOf(c1, c2), s1.id)
+      submissionRegistry.addContinuations(listOf(c3), s1.id)
+      submissionRegistry.addContinuations(listOf(c4), s2.id)
 
       submissionRegistry.setAllContinuationsStatus(s1.id,
-        SubmissionRegistry.ContinuationStatus.REGISTERED,
-        SubmissionRegistry.ContinuationStatus.CANCELLED)
+        Continuation.Status.REGISTERED,
+        Continuation.Status.CANCELLED)
 
       ctx.coVerify {
         assertThat(submissionRegistry.getContinuationStatus(c1.id))
-          .isEqualTo(SubmissionRegistry.ContinuationStatus.CANCELLED)
+          .isEqualTo(Continuation.Status.CANCELLED)
         assertThat(submissionRegistry.getContinuationStatus(c2.id))
-          .isEqualTo(SubmissionRegistry.ContinuationStatus.CANCELLED)
+          .isEqualTo(Continuation.Status.CANCELLED)
         assertThat(submissionRegistry.getContinuationStatus(c3.id))
-          .isEqualTo(SubmissionRegistry.ContinuationStatus.PROCESSED) // unchanged
+          .isEqualTo(Continuation.Status.PROCESSED) // unchanged
         assertThat(submissionRegistry.getContinuationStatus(c4.id))
-          .isEqualTo(SubmissionRegistry.ContinuationStatus.REGISTERED) // unchanged
+          .isEqualTo(Continuation.Status.REGISTERED) // unchanged
+
+        assertThat(submissionRegistry.findContinuationById(c1.id)?.endTime).isNotNull()
+        assertThat(submissionRegistry.findContinuationById(c2.id)?.endTime).isNotNull()
+        assertThat(submissionRegistry.findContinuationById(c4.id)?.endTime).isNull() // unchanged
       }
 
       ctx.completeNow()
@@ -3719,38 +3720,35 @@ abstract class SubmissionRegistryTest {
   fun countContinuations(vertx: Vertx, ctx: VertxTestContext) {
     val s1 = Submission(workflow = Workflow())
     val s2 = Submission(workflow = Workflow())
-    val c1 = Continuation(suspendActionId = "sa1", inputs = emptyList(), outputs = emptyList())
-    val c2 = Continuation(suspendActionId = "sa2", inputs = emptyList(), outputs = emptyList())
-    val c3 = Continuation(suspendActionId = "sa3", inputs = emptyList(), outputs = emptyList())
-    val c4 = Continuation(suspendActionId = "sa4", inputs = emptyList(), outputs = emptyList())
+    val c1 = Continuation(suspendActionId = "sa1", status = Continuation.Status.REGISTERED, inputs = emptyList(), outputs = emptyList())
+    val c2 = Continuation(suspendActionId = "sa2", status = Continuation.Status.REGISTERED, inputs = emptyList(), outputs = emptyList())
+    val c3 = Continuation(suspendActionId = "sa3", status = Continuation.Status.PROCESSED, inputs = emptyList(), outputs = emptyList())
+    val c4 = Continuation(suspendActionId = "sa4", status = Continuation.Status.REGISTERED, inputs = emptyList(), outputs = emptyList())
 
     CoroutineScope(vertx.dispatcher()).launch {
       submissionRegistry.addSubmission(s1)
       submissionRegistry.addSubmission(s2)
-      submissionRegistry.addContinuations(listOf(c1, c2), s1.id,
-        SubmissionRegistry.ContinuationStatus.REGISTERED)
-      submissionRegistry.addContinuations(listOf(c3), s1.id,
-        SubmissionRegistry.ContinuationStatus.PROCESSED)
-      submissionRegistry.addContinuations(listOf(c4), s2.id,
-        SubmissionRegistry.ContinuationStatus.REGISTERED)
+      submissionRegistry.addContinuations(listOf(c1, c2), s1.id)
+      submissionRegistry.addContinuations(listOf(c3), s1.id)
+      submissionRegistry.addContinuations(listOf(c4), s2.id)
 
       ctx.coVerify {
         assertThat(submissionRegistry.countContinuations()).isEqualTo(4L)
         assertThat(submissionRegistry.countContinuations(submissionId = s1.id)).isEqualTo(3L)
         assertThat(submissionRegistry.countContinuations(submissionId = s2.id)).isEqualTo(1L)
         assertThat(submissionRegistry.countContinuations(
-          status = SubmissionRegistry.ContinuationStatus.REGISTERED)).isEqualTo(3L)
+          status = Continuation.Status.REGISTERED)).isEqualTo(3L)
         assertThat(submissionRegistry.countContinuations(
-          status = SubmissionRegistry.ContinuationStatus.PROCESSED)).isEqualTo(1L)
-        assertThat(submissionRegistry.countContinuations(
-          submissionId = s1.id,
-          status = SubmissionRegistry.ContinuationStatus.REGISTERED)).isEqualTo(2L)
+          status = Continuation.Status.PROCESSED)).isEqualTo(1L)
         assertThat(submissionRegistry.countContinuations(
           submissionId = s1.id,
-          status = SubmissionRegistry.ContinuationStatus.PROCESSED)).isEqualTo(1L)
+          status = Continuation.Status.REGISTERED)).isEqualTo(2L)
+        assertThat(submissionRegistry.countContinuations(
+          submissionId = s1.id,
+          status = Continuation.Status.PROCESSED)).isEqualTo(1L)
         assertThat(submissionRegistry.countContinuations(
           submissionId = s2.id,
-          status = SubmissionRegistry.ContinuationStatus.PROCESSED)).isZero
+          status = Continuation.Status.PROCESSED)).isZero
       }
 
       ctx.completeNow()
