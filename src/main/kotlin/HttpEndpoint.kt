@@ -1948,7 +1948,6 @@ class HttpEndpoint : CoroutineVerticle() {
         ).map { p ->
           JsonUtils.toJson(p.first).also {
             it.put("submissionId", p.second)
-            it.put("status", submissionRegistry.getContinuationStatus(p.first.id))
             it.put("results", submissionRegistry.getContinuationResults(p.first.id))
           }
         }
@@ -2035,7 +2034,7 @@ class HttpEndpoint : CoroutineVerticle() {
         renderError(ctx, 404, "There is no continuation with ID `$id'")
       } else {
 
-        val currentStatus = submissionRegistry.getContinuationStatus(id)
+        val currentStatus = continuation.status
         if (results != null && currentStatus != Continuation.Status.OPEN) {
           // 422 Unprocessable Entity
           renderError(ctx, 422, "Cannot change results of a finished continuation. Current status: $currentStatus")
@@ -2078,7 +2077,6 @@ class HttpEndpoint : CoroutineVerticle() {
         val submissionId = submissionRegistry.getContinuationSubmissionId(id)
         val json = JsonUtils.toJson(updatedContinuation).also {
           it.put("submissionId", submissionId)
-          it.put("status", submissionRegistry.getContinuationStatus(id))
           it.put("results", submissionRegistry.getContinuationResults(id))
         }
 

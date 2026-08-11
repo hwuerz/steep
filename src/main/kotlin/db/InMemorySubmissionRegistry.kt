@@ -808,10 +808,6 @@ class InMemorySubmissionRegistry(private val vertx: Vertx) : SubmissionRegistry 
     return getContinuationEntryById(continuationId).submissionId
   }
 
-  override suspend fun getContinuationStatus(continuationId: String): Continuation.Status {
-    return getContinuationEntryById(continuationId).continuation.status
-  }
-
   private fun setContinuationEntryStatus(entry: ContinuationEntry, status: Continuation.Status): ContinuationEntry {
     return entry.copy(continuation =
         if (status != Continuation.Status.OPEN) {

@@ -545,14 +545,6 @@ interface SubmissionRegistry : Registry {
   suspend fun getContinuationSubmissionId(continuationId: String): String
 
   /**
-   * Get the status of a continuation
-   * @param continuationId the continuation ID
-   * @return the continuation status
-   * @throws NoSuchElementException if the continuation does not exist
-   */
-  suspend fun getContinuationStatus(continuationId: String): Continuation.Status
-
-  /**
    * Set the status of a continuation
    * @param continuationId the continuation ID
    * @param status the new status

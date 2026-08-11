@@ -817,14 +817,6 @@ class PostgreSQLSubmissionRegistry(private val vertx: Vertx, url: String,
     return block(r)
   }
 
-  override suspend fun getContinuationStatus(continuationId: String): Continuation.Status {
-    val statement = "SELECT $DATA->'$STATUS' FROM $CONTINUATIONS WHERE $ID=$1"
-    val params = Tuple.of(continuationId)
-    val rs = client.preparedQuery(statement).execute(params).coAwait()?.firstOrNull()
-        ?: throw NoSuchElementException("There is no continuation with ID `$continuationId'")
-    return Continuation.Status.valueOf(rs.getString(0))
-  }
-
   override suspend fun setContinuationStatus(
     continuationId: String,
     status: Continuation.Status

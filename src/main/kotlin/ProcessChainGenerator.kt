@@ -420,7 +420,6 @@ class ProcessChainGenerator(workflow: Workflow, private val tmpPath: String,
           )
         }
       }
-      
     }
   }
 

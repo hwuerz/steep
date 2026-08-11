@@ -1112,12 +1112,6 @@ class MongoDBSubmissionRegistry(private val vertx: Vertx,
     return getField(collContinuations, "continuation", continuationId, SUBMISSION_ID)
   }
 
-  override suspend fun getContinuationStatus(continuationId: String): Continuation.Status {
-    return getField<String>(collContinuations, "continuation", continuationId, STATUS).let {
-      Continuation.Status.valueOf(it)
-    }
-  }
-
   override suspend fun setContinuationStatus(
     continuationId: String,
     status: Continuation.Status
