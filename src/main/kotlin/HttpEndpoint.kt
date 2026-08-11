@@ -286,6 +286,11 @@ class HttpEndpoint : CoroutineVerticle() {
       .produces("text/html")
       .handler(this::onGetContinuations)
 
+    router.get("/continuations/:id/?")
+      .handler(bodyHandler)
+      .produces("application/json")
+      .handler(this::onGetContinuationById)
+
     router.put("/continuations/:id/?")
       .handler(bodyHandler)
       .produces("application/json")
@@ -1961,6 +1966,28 @@ class HttpEndpoint : CoroutineVerticle() {
           .putHeader("x-page-offset", offset.toString())
           .putHeader("x-page-total", total.toString())
           .end(encodedJson)
+      }
+    }
+  }
+
+  private fun onGetContinuationById(ctx: RoutingContext) {
+    if (prefersHtml(ctx) && false) {
+      TODO("Implement a separate UI for continuations")
+//      renderAsset("ui/continuations/[id].html/index.html", ctx.response())
+    } else {
+      launch {
+        val id = ctx.pathParam("id")!!
+        val continuation = submissionRegistry.findContinuationById(id)
+        if (continuation == null) {
+          renderError(ctx, 404, "There is no continuation with ID `$id'")
+        } else {
+          val json = JsonUtils.toJson(continuation)
+          json.put("submissionId", submissionRegistry.getContinuationSubmissionId(id))
+          json.put("results", submissionRegistry.getContinuationResults(id))
+          ctx.response()
+            .putHeader("content-type", "application/json")
+            .end(json.encode())
+        }
       }
     }
   }
