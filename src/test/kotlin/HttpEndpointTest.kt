@@ -748,6 +748,11 @@ class HttpEndpointTest {
         ProcessChainStatus.ERROR to 4L,
         ProcessChainStatus.SUCCESS to 5L
     )
+    coEvery { submissionRegistry.countContinuationsPerStatus(s1.id) } returns mapOf(
+        Continuation.Status.OPEN to 7L,
+        Continuation.Status.PROCESSED to 8L,
+        Continuation.Status.CANCELLED to 9L
+    )
 
     val s2 = Submission(workflow = Workflow(), source = "actions: []")
     coEvery { submissionRegistry.countProcessChainsPerStatus(s2.id) } returns mapOf(
@@ -757,10 +762,18 @@ class HttpEndpointTest {
         ProcessChainStatus.ERROR to 14L,
         ProcessChainStatus.SUCCESS to 15L
     )
+    coEvery { submissionRegistry.countContinuationsPerStatus(s2.id) } returns mapOf(
+        Continuation.Status.OPEN to 16L,
+        Continuation.Status.PROCESSED to 17L,
+        Continuation.Status.CANCELLED to 18L
+    )
 
     val s3 = Submission(workflow = Workflow(priority = 10), status = Submission.Status.SUCCESS)
     coEvery { submissionRegistry.countProcessChainsPerStatus(s3.id) } returns
         mapOf(ProcessChainStatus.SUCCESS to 1L)
+    coEvery { submissionRegistry.countContinuationsPerStatus(s3.id) } returns mapOf(
+        Continuation.Status.OPEN to 1L
+    )
 
     coEvery { metadataRegistry.findServices() } returns emptyList()
 
@@ -802,6 +815,10 @@ class HttpEndpointTest {
                 "failedProcessChains" to 4,
                 "succeededProcessChains" to 5,
                 "totalProcessChains" to 21,
+                "openContinuations" to 7,
+                "processedContinuations" to 8,
+                "cancelledContinuations" to 9,
+                "totalContinuations" to 24,
                 "requiredCapabilities" to jsonArrayOf()
             ),
             jsonObjectOf(
@@ -813,6 +830,10 @@ class HttpEndpointTest {
                 "failedProcessChains" to 14,
                 "succeededProcessChains" to 15,
                 "totalProcessChains" to 65,
+                "openContinuations" to 16,
+                "processedContinuations" to 17,
+                "cancelledContinuations" to 18,
+                "totalContinuations" to 51,
                 "requiredCapabilities" to jsonArrayOf()
             ),
             jsonObjectOf(
@@ -825,6 +846,10 @@ class HttpEndpointTest {
                 "failedProcessChains" to 0,
                 "succeededProcessChains" to 1,
                 "totalProcessChains" to 1,
+                "openContinuations" to 1,
+                "processedContinuations" to 0,
+                "cancelledContinuations" to 0,
+                "totalContinuations" to 1,
                 "requiredCapabilities" to jsonArrayOf()
             )
         ))
@@ -846,6 +871,10 @@ class HttpEndpointTest {
 
     coEvery { submissionRegistry.countProcessChainsPerStatus(s3.id) } returns
         mapOf(ProcessChainStatus.SUCCESS to 1L)
+
+    coEvery { submissionRegistry.countContinuationsPerStatus(s3.id) } returns mapOf(
+        Continuation.Status.PROCESSED to 1L
+    )
 
     coEvery { metadataRegistry.findServices() } returns emptyList()
 
@@ -877,6 +906,10 @@ class HttpEndpointTest {
                 "failedProcessChains" to 0,
                 "succeededProcessChains" to 1,
                 "totalProcessChains" to 1,
+                "openContinuations" to 0,
+                "processedContinuations" to 1,
+                "cancelledContinuations" to 0,
+                "totalContinuations" to 1,
                 "requiredCapabilities" to jsonArrayOf()
             )
         ))
@@ -899,6 +932,12 @@ class HttpEndpointTest {
         ProcessChainStatus.CANCELLED to 3L,
         ProcessChainStatus.ERROR to 4L,
         ProcessChainStatus.SUCCESS to 5L
+    )
+
+    coEvery { submissionRegistry.countContinuationsPerStatus(s1.id) } returns mapOf(
+        Continuation.Status.OPEN to 7L,
+        Continuation.Status.PROCESSED to 8L,
+        Continuation.Status.CANCELLED to 9L
     )
 
     coEvery { metadataRegistry.findServices() } returns emptyList()
@@ -933,6 +972,10 @@ class HttpEndpointTest {
             "failedProcessChains" to 4,
             "succeededProcessChains" to 5,
             "totalProcessChains" to 21,
+            "openContinuations" to 7,
+            "processedContinuations" to 8,
+            "cancelledContinuations" to 9,
+            "totalContinuations" to 24,
             "requiredCapabilities" to jsonArrayOf(),
             "source" to source
         ))
@@ -955,6 +998,8 @@ class HttpEndpointTest {
     )), requiredCapabilities = setOf("cap1", "cap2", "cap3"))
     coEvery { submissionRegistry.countProcessChainsPerStatus(s1.id) } returns
         mapOf(ProcessChainStatus.REGISTERED to 1L)
+    coEvery { submissionRegistry.countContinuationsPerStatus(s1.id) } returns
+        mapOf(Continuation.Status.OPEN to 2L)
     coEvery { submissionRegistry.findSubmissionById(s1.id) } returns s1
 
     val client = WebClient.create(vertx)
@@ -977,6 +1022,10 @@ class HttpEndpointTest {
             "failedProcessChains" to 0,
             "succeededProcessChains" to 0,
             "totalProcessChains" to 1,
+            "openContinuations" to 2,
+            "processedContinuations" to 0,
+            "cancelledContinuations" to 0,
+            "totalContinuations" to 2,
             "requiredCapabilities" to jsonArrayOf("cap1", "cap2", "cap3")
         ))
       }
@@ -993,6 +1042,8 @@ class HttpEndpointTest {
     val s1 = Submission(workflow = Workflow(), status = Submission.Status.SUCCESS)
     coEvery { submissionRegistry.countProcessChainsPerStatus(s1.id) } returns
         mapOf(ProcessChainStatus.SUCCESS to 1L)
+    coEvery { submissionRegistry.countContinuationsPerStatus(s1.id) } returns
+        mapOf(Continuation.Status.OPEN to 2L)
 
     coEvery { metadataRegistry.findServices() } returns emptyList()
 
@@ -1021,6 +1072,10 @@ class HttpEndpointTest {
             "failedProcessChains" to 0,
             "succeededProcessChains" to 1,
             "totalProcessChains" to 1,
+            "openContinuations" to 2,
+            "processedContinuations" to 0,
+            "cancelledContinuations" to 0,
+            "totalContinuations" to 2,
             "results" to JsonUtils.toJson(results),
             "requiredCapabilities" to jsonArrayOf()
         ))
@@ -1038,6 +1093,8 @@ class HttpEndpointTest {
     val s1 = Submission(workflow = Workflow(), status = Submission.Status.ERROR)
     coEvery { submissionRegistry.countProcessChainsPerStatus(s1.id) } returns
         mapOf(ProcessChainStatus.ERROR to 1)
+    coEvery { submissionRegistry.countContinuationsPerStatus(s1.id) } returns
+        mapOf(Continuation.Status.OPEN to 2L)
 
     coEvery { metadataRegistry.findServices() } returns emptyList()
 
@@ -1066,6 +1123,10 @@ class HttpEndpointTest {
             "failedProcessChains" to 1,
             "succeededProcessChains" to 0,
             "totalProcessChains" to 1,
+            "openContinuations" to 2,
+            "processedContinuations" to 0,
+            "cancelledContinuations" to 0,
+            "totalContinuations" to 2,
             "errorMessage" to errorMessage,
             "requiredCapabilities" to jsonArrayOf()
         ))
@@ -1181,6 +1242,9 @@ class HttpEndpointTest {
             ProcessChainStatus.RUNNING to 1L,
             ProcessChainStatus.CANCELLED to 2L
         )
+        coEvery { submissionRegistry.countContinuationsPerStatus(s1.id) } returns mapOf(
+            Continuation.Status.OPEN to 2L
+        )
         val response1 = client.put(port, "localhost", "/workflows/${s1.id}")
             .`as`(BodyCodec.jsonObject())
             .expect(ResponsePredicate.SC_OK)
@@ -1197,7 +1261,11 @@ class HttpEndpointTest {
             "cancelledProcessChains" to 2,
             "succeededProcessChains" to 0,
             "failedProcessChains" to 0,
-            "totalProcessChains" to 3
+            "totalProcessChains" to 3,
+            "openContinuations" to 2,
+            "processedContinuations" to 0,
+            "cancelledContinuations" to 0,
+            "totalContinuations" to 2
         ))
 
         coVerify(exactly = 1) {
@@ -1228,6 +1296,10 @@ class HttpEndpointTest {
             "succeededProcessChains" to 0,
             "failedProcessChains" to 0,
             "totalProcessChains" to 3,
+            "openContinuations" to 2,
+            "processedContinuations" to 0,
+            "cancelledContinuations" to 0,
+            "totalContinuations" to 2,
             "priority" to expectedPriority
         ))
 
@@ -2411,6 +2483,7 @@ class HttpEndpointTest {
     )
     val c2 = Continuation(
         suspendActionId = "modification",
+        status = Continuation.Status.PROCESSED,
         inputs = listOf(ContinuationParameter("suspend_input", "/tmp/input-2.txt", Argument.Type.INPUT)),
         outputs = listOf(ContinuationParameter("new_input", null, Argument.Type.OUTPUT))
     )
@@ -2423,12 +2496,6 @@ class HttpEndpointTest {
     coEvery { submissionRegistry.findContinuations(null, null, 10, 0, -1) } returns
         listOf(c1 to s1.id, c2 to s2.id, c3 to s2.id)
     coEvery { submissionRegistry.countContinuations(null, null) } returns 3
-    coEvery { submissionRegistry.getContinuationStatus(c1.id) } returns
-        Continuation.Status.OPEN
-    coEvery { submissionRegistry.getContinuationStatus(c2.id) } returns
-        Continuation.Status.PROCESSED
-    coEvery { submissionRegistry.getContinuationStatus(c3.id) } returns
-        Continuation.Status.OPEN
     coEvery { submissionRegistry.getContinuationResults(c1.id) } returns null
     coEvery { submissionRegistry.getContinuationResults(c2.id) } returns mapOf(
         "new_input" to listOf<Any>("/tmp/new-input.txt"))
@@ -2451,19 +2518,16 @@ class HttpEndpointTest {
     val expectedC1Response = JsonUtils.toJson(c1).also {
       it.put("submissionId", s1.id)
       it.put("startTime", c1.startTime)
-      it.put("status", Continuation.Status.OPEN.toString())
       it.put("results", null)
     }
     val expectedC2Response = JsonUtils.toJson(c2).also {
       it.put("submissionId", s2.id)
       it.put("startTime", c2.startTime)
-      it.put("status", Continuation.Status.PROCESSED.toString())
       it.put("results", jsonObjectOf("new_input" to jsonArrayOf("/tmp/new-input.txt")))
     }
     val expectedC3Response = JsonUtils.toJson(c3).also {
       it.put("submissionId", s2.id)
       it.put("startTime", c3.startTime)
-      it.put("status", Continuation.Status.OPEN.toString())
       it.put("results", null)
     }
 
@@ -2574,11 +2638,6 @@ class HttpEndpointTest {
     }
     coEvery { submissionRegistry.getContinuationSubmissionId(c1.id) } returns submissionId
     coEvery { submissionRegistry.getContinuationSubmissionId(c2.id) } returns submissionId
-
-    coEvery { submissionRegistry.getContinuationStatus(any()) } answers {
-      continuations[firstArg<String>()]?.status
-          ?: throw IllegalStateException("Unknown continuation ID")
-    }
     coEvery { submissionRegistry.setContinuationStatus(any(), any()) } answers {
       continuations[firstArg<String>()] = continuations[firstArg<String>()]?.copy(
           status = secondArg<Continuation.Status>(),

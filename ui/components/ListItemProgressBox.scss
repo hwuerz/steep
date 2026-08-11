@@ -32,6 +32,10 @@
   min-width: 14rem;
   max-width: 100%;
 
+  &:not(:first-child) {
+    margin-top: $spacer;
+  }
+
   .feather {
     height: 3rem;
     width: auto;

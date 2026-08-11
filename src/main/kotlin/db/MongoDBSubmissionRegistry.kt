@@ -1108,6 +1108,24 @@ class MongoDBSubmissionRegistry(private val vertx: Vertx,
     })
   }
 
+  override suspend fun countContinuationsPerStatus(submissionId: String?): Map<Continuation.Status, Long> {
+    val pipeline = mutableListOf<JsonObject>()
+    if (submissionId != null) {
+      pipeline.add(jsonObjectOf(
+          "\$match" to jsonObjectOf(
+              SUBMISSION_ID to submissionId
+          )
+      ))
+    }
+
+    pipeline.add(jsonObjectOf(
+        "\$sortByCount" to "$$STATUS"
+    ))
+
+    return collContinuations.aggregateAwait(pipeline).associateBy({
+      Continuation.Status.valueOf(it.getString(INTERNAL_ID)) },  { it.getLong("count") })
+  }
+
   override suspend fun getContinuationSubmissionId(continuationId: String): String {
     return getField(collContinuations, "continuation", continuationId, SUBMISSION_ID)
   }

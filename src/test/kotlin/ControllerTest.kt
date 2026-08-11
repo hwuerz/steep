@@ -724,6 +724,7 @@ class ControllerTest {
         assertThat(captured.inputs.map { it.id }).containsExactly("suspend_input")
         assertThat(captured.inputs.first().value).isEqualTo(firstProcessChainOutputFileValue)
         assertThat(captured.outputs.map { it.id }).containsExactly("new_input")
+        assertThat(captured.status).isEqualTo(Continuation.Status.OPEN)
       }
     }
 

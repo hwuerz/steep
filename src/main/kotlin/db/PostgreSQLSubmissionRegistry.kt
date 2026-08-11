@@ -800,6 +800,22 @@ class PostgreSQLSubmissionRegistry(private val vertx: Vertx, url: String,
     return rs?.firstOrNull()?.getLong(0) ?: 0L
   }
 
+  override suspend fun countContinuationsPerStatus(submissionId: String?): Map<Continuation.Status, Long> {
+    val statement = StringBuilder()
+    statement.append("SELECT $DATA->'$STATUS', COUNT(*) FROM $CONTINUATIONS")
+
+    val params = Tuple.tuple()
+    if (submissionId != null) {
+      statement.append(" WHERE $SUBMISSION_ID=$1")
+      params.addString(submissionId)
+    }
+    statement.append(" GROUP BY $DATA->'$STATUS'")
+
+    val rs = client.preparedQuery(statement.toString()).execute(params).coAwait()
+    return rs.associateBy({ Continuation.Status.valueOf(it.getString(0)) },
+        { it.getLong(1) })
+  }
+
   override suspend fun getContinuationSubmissionId(continuationId: String): String {
     return continuationSubmissionIds.getIfPresent(continuationId) ?: run {
       val sid = getContinuationColumn(continuationId, SUBMISSION_ID) { it.getString(0) }

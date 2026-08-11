@@ -42,6 +42,8 @@ const config = {
       "/": { page: "/" },
       "/agents": { page: "/agents" },
       "/agents/[id].html": { page: "/agents/[id]" },
+      "/continuations": { page: "/continuations" },
+      "/continuations/[id].html": { page: "/continuations/[id]" },
       "/logs/processchains/[id].html": { page: "/logs/processchains/[id]" },
       "/new/workflow": { page: "/new/workflow" },
       "/plugins": { page: "/plugins" },

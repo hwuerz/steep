@@ -13,6 +13,7 @@ import {
   PauseCircle,
   Power,
   RotateCw,
+  StepForward,
   Trash2,
   XCircle
 } from "lucide-react"
@@ -208,6 +209,15 @@ const ListItemProgressBox = ({ progress, deleted = false }) => {
       icon = (
         <CheckCircle
           className={classNames("feather", "processed", "success", resolvedStyles.className)}
+        />
+      )
+      break
+
+    case "CONTINUATION":
+      defaultTitle = "Continuation"
+      icon = (
+        <StepForward
+          className={classNames("feather", "continuation", resolvedStyles.className)}
         />
       )
       break

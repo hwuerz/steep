@@ -804,6 +804,16 @@ class InMemorySubmissionRegistry(private val vertx: Vertx) : SubmissionRegistry 
         .toLong()
   }
 
+  override suspend fun countContinuationsPerStatus(submissionId: String?): Map<Continuation.Status, Long> {
+    val result = mutableMapOf<Continuation.Status, Long>()
+    findContinuationEntries().forEach { c ->
+      if (submissionId == null || c.submissionId == submissionId) {
+        result.merge(c.continuation.status, 1L) { v, _ -> v + 1L }
+      }
+    }
+    return result
+  }
+
   override suspend fun getContinuationSubmissionId(continuationId: String): String {
     return getContinuationEntryById(continuationId).submissionId
   }

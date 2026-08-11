@@ -289,6 +289,7 @@ class HttpEndpoint : CoroutineVerticle() {
     router.get("/continuations/:id/?")
       .handler(bodyHandler)
       .produces("application/json")
+      .produces("text/html")
       .handler(this::onGetContinuationById)
 
     router.put("/continuations/:id/?")
@@ -1253,18 +1254,28 @@ class HttpEndpoint : CoroutineVerticle() {
   private suspend fun amendSubmission(submission: JsonObject,
       includeDetails: Boolean = false) {
     val submissionId = submission.getString("id")
-    val statuses = submissionRegistry.countProcessChainsPerStatus(submissionId)
+
+    val processChainStatuses = submissionRegistry.countProcessChainsPerStatus(submissionId)
     submission.put("runningProcessChains",
-        statuses[SubmissionRegistry.ProcessChainStatus.RUNNING] ?: 0L)
+        processChainStatuses[SubmissionRegistry.ProcessChainStatus.RUNNING] ?: 0L)
     submission.put("pausedProcessChains",
-        statuses[SubmissionRegistry.ProcessChainStatus.PAUSED] ?: 0L)
+        processChainStatuses[SubmissionRegistry.ProcessChainStatus.PAUSED] ?: 0L)
     submission.put("cancelledProcessChains",
-        statuses[SubmissionRegistry.ProcessChainStatus.CANCELLED] ?: 0L)
+        processChainStatuses[SubmissionRegistry.ProcessChainStatus.CANCELLED] ?: 0L)
     submission.put("succeededProcessChains",
-        statuses[SubmissionRegistry.ProcessChainStatus.SUCCESS] ?: 0L)
+        processChainStatuses[SubmissionRegistry.ProcessChainStatus.SUCCESS] ?: 0L)
     submission.put("failedProcessChains",
-        statuses[SubmissionRegistry.ProcessChainStatus.ERROR] ?: 0L)
-    submission.put("totalProcessChains", statuses.values.sum())
+        processChainStatuses[SubmissionRegistry.ProcessChainStatus.ERROR] ?: 0L)
+    submission.put("totalProcessChains", processChainStatuses.values.sum())
+
+    val continuationStatuses = submissionRegistry.countContinuationsPerStatus(submissionId)
+    submission.put("openContinuations",
+        continuationStatuses[Continuation.Status.OPEN] ?: 0L)
+    submission.put("processedContinuations",
+        continuationStatuses[Continuation.Status.PROCESSED] ?: 0L)
+    submission.put("cancelledContinuations",
+        continuationStatuses[Continuation.Status.CANCELLED] ?: 0L)
+    submission.put("totalContinuations", continuationStatuses.values.sum())
 
     if (includeDetails) {
       val strStatus = submission.getString("status")
@@ -1929,9 +1940,8 @@ class HttpEndpoint : CoroutineVerticle() {
    * @param ctx the routing context
    */
   private fun onGetContinuations(ctx: RoutingContext) {
-    if (prefersHtml(ctx) && false) {
-      TODO("Implement a separate UI for continuations")
-//      renderAsset("ui/continuations/index.html", ctx.response())
+    if (prefersHtml(ctx)) {
+      renderAsset("ui/continuations/index.html", ctx.response())
     } else {
       launch {
         val offset = max(0, ctx.request().getParam("offset")?.toIntOrNull() ?: 0)
@@ -1971,9 +1981,8 @@ class HttpEndpoint : CoroutineVerticle() {
   }
 
   private fun onGetContinuationById(ctx: RoutingContext) {
-    if (prefersHtml(ctx) && false) {
-      TODO("Implement a separate UI for continuations")
-//      renderAsset("ui/continuations/[id].html/index.html", ctx.response())
+    if (prefersHtml(ctx)) {
+      renderAsset("ui/continuations/[id].html/index.html", ctx.response())
     } else {
       launch {
         val id = ctx.pathParam("id")!!

@@ -71,6 +71,7 @@ function WorkflowDetails({ id }) {
   let priority
   let deleted
   let status
+  let continuationProgress
   if (workflows.items !== undefined && workflows.items.length > 0) {
     let w = workflows.items[0]
     id = w.id
@@ -81,6 +82,14 @@ function WorkflowDetails({ id }) {
     workflowSource = submissionToSource(w)
     deleted = !!w.deleted
     status = w.status
+    if (w.totalContinuations > 0) {
+      continuationProgress = {
+        open: w.openContinuations,
+        processed: w.processedContinuations,
+        cancelled: w.cancelledContinuations,
+        total: w.totalContinuations
+      }
+    }
   }
 
   const codeBox = useMemo(
@@ -161,6 +170,16 @@ function WorkflowDetails({ id }) {
             <DefinitionListItem title="Required capabilities">
               {reqcap}
             </DefinitionListItem>
+            {continuationProgress && <DefinitionListItem title="Continuations">
+              <Link href={{
+                pathname: "/continuations",
+                query: {
+                  submissionId: id
+                }
+              }}>
+                {continuationProgress.processed + continuationProgress.cancelled} of {continuationProgress.total} completed
+              </Link>
+            </DefinitionListItem>}
           </DefinitionList>
         </div>
         <style jsx>{styles}</style>
@@ -198,6 +217,21 @@ function WorkflowDetails({ id }) {
           {detailHeaderLeft}
           <div className="detail-header-right">
             <ListItemProgressBox progress={progress} deleted={deleted} />
+            {continuationProgress && continuationProgress.open > 0 && (
+                <ListItemProgressBox progress={{
+                  status: "CONTINUATION",
+                  title: "Continuations",
+                  subtitle: (<Link href={{
+                    pathname: "/continuations",
+                    query: {
+                      submissionId: id,
+                      status: "OPEN"
+                    }
+                  }}>
+                    {continuationProgress.open} open
+                  </Link>)
+                }} deleted={deleted} />
+            )}
           </div>
         </div>
         {w.errorMessage && (

@@ -9,7 +9,8 @@ import {
   Puzzle,
   Search,
   Send,
-  Server
+  Server,
+  StepForward
 } from "lucide-react"
 import { useContext, useState } from "react"
 import SteepLogo from "../assets/steep-logo.svg"
@@ -81,6 +82,7 @@ const Sidebar = () => {
               icon={<LinkIcon />}
               text="Process Chains"
             />
+            <NavItem href="/continuations/" icon={<StepForward />} text="Continuations" />
             <NavItem href="/agents/" icon={<Pocket />} text="Agents" />
             <NavItem href="/vms/" icon={<Server />} text="VMs" />
             <NavItem href="/services/" icon={<LayoutGrid />} text="Services" />

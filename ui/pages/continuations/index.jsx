@@ -12,7 +12,7 @@ const FILTERS = [
   {
     name: "status",
     title: "Open continuations only",
-    enabledValue: "REGISTERED"
+    enabledValue: "OPEN"
   },
   {
     name: "status",

@@ -535,6 +535,17 @@ interface SubmissionRegistry : Registry {
    */
   suspend fun countContinuations(submissionId: String? = null,
                                  status: Continuation.Status? = null): Long
+  /**
+   * Group continuations belonging to a given [submissionId] by status and
+   * count the items in each group. Example: if the submission contains 1
+   * continuation with the status [Continuation.Status.OPEN] and 2 continuations
+   * with the status [Continuation.Status.PROCESSED], the method will return
+   * `mapOf(Continuation.Status.OPEN to 1L, Continuation.Status.PROCESSED to 2L)`.
+   * [submissionId] may be null if all continuations in the registry should
+   * be counted.
+   */
+  suspend fun countContinuationsPerStatus(submissionId: String? = null):
+      Map<Continuation.Status, Long>
 
   /**
    * Get the ID of the submission the given continuation belongs to

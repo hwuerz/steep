@@ -357,9 +357,9 @@ class Controller(private val disablePeriodicLookupForSubmissions: Boolean = fals
           continuationsToResume = null
           emptyList<ProcessChain>() to continuations
         } else {
-          val pcs = applyPlugins(generator.generate(results, executedExecutableIds),
-            submission.workflow)
+          val rawPcs = generator.generate(results, executedExecutableIds)
           val continuations = generator.getContinuations()
+          val pcs = applyPlugins(rawPcs, submission.workflow)
           if (processChains.isEmpty() && pcs.isEmpty() && continuations.isEmpty()) {
             break
           }

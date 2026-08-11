@@ -1,15 +1,290 @@
+import DetailPage from "../../../components/layouts/DetailPage"
+import Link from "next/link"
 import { useRouter } from "next/router"
-import ContinuationDetails from "../../../components/continuations/ContinuationDetails"
+import { useContext, useEffect, useState } from "react"
+import Alert from "../../../components/Alert"
+import CancelModal from "../../../components/CancelModal"
+import DefinitionList from "../../../components/DefinitionList"
+import DefinitionListItem from "../../../components/DefinitionListItem"
+import ListItemProgressBox from "../../../components/ListItemProgressBox"
+import LiveDuration from "../../../components/LiveDuration"
+import Modal from "../../../components/Modal"
+import ModalButtons from "../../../components/ModalButtons"
 import ContinuationContext from "../../../components/continuations/ContinuationContext"
+import EventBusContext from "../../../components/lib/EventBusContext"
+import { formatDate, formatDurationTitle } from "../../../components/lib/date-time-utils"
+import fetcher from "../../../components/lib/json-fetcher"
+import ParameterValues from "../../../components/continuations/ParameterValues"
+import styles from "./index.scss"
 
 const Continuation = () => {
   const router = useRouter()
   const { id } = router.query
 
+  const continuations = useContext(ContinuationContext.Items)
+  const updateContinuations = useContext(ContinuationContext.UpdateItems)
+  const eventBus = useContext(EventBusContext)
+  const [error, setError] = useState()
+  const [cancelModalOpen, setCancelModalOpen] = useState(false)
+  const [results, setResults] = useState({})
+  const [confirmModalOpen, setConfirmModalOpen] = useState(false)
+  const [submitPending, setSubmitPending] = useState(false)
+
+  const [continuation, setContinuation] = useState(undefined)
+
+//   let continuation
+//   if (continuations.items !== undefined && continuations.items.length > 0) {
+//     continuation = continuations.items[0]
+//   } else {
+//     continuation = undefined
+//   }
+
+  useEffect(() => {
+    if (!continuation) {
+      return
+    }
+
+    setResults(Object.fromEntries(
+      continuation.outputs.map(output => [
+        output.id,
+        // Prepare an empty array for each output if none exists yet.
+        continuation.results?.[output.id] || []
+      ])
+    ))
+  }, [continuation])
+
+  useEffect(() => {
+    if (!id) {
+      return
+    }
+
+    fetcher(`${process.env.baseUrl}/continuations/${id}`)
+    //   .then(continuation => updateContinuations({ action: "set", items: [continuation] }))
+      .then(con => {
+        console.log("Fetched continuation:", con)
+        setContinuation(con)
+      })
+      .catch(err => {
+        console.log(err)
+        setError(<Alert error>Could not load continuation</Alert>)
+      })
+  }, [id, updateContinuations])
+
+  function onDoCancel() {
+    setCancelModalOpen(false)
+    fetcher(`${process.env.baseUrl}/continuations/${id}`, false, {
+      method: "PUT",
+      body: JSON.stringify({
+        status: "CANCELLED"
+      })
+    }).catch(error => {
+      console.error(error)
+    })
+  }
+
+  function onSubmit() {
+    const cleanedResults = Object.fromEntries(
+      Object.entries(results).map(([key, values]) => [
+        key,
+        values.filter(value => value !== "")
+      ])
+    )
+
+    setSubmitPending(true)
+    fetcher(`${process.env.baseUrl}/continuations/${id}`, false, {
+      method: "PUT",
+      body: JSON.stringify({ results: cleanedResults, status: "PROCESSED" })
+    }).then(updatedContinuation => {
+    //   updateContinuations({ action: "set", items: [updatedContinuation] })
+      setContinuation(updatedContinuation)
+      setConfirmModalOpen(false)
+    }).catch(error => {
+      console.error(error)
+    }).finally(() => {
+      setSubmitPending(false)
+    })
+  }
+
+  let breadcrumbs
+  let title
+  let continuationMetadata
+  let menu
+  let continuationInputs
+  let continuationOutputs
+
+  if (continuation !== undefined) {
+    title = continuation.id
+    breadcrumbs = [
+      <Link href="/workflows" key="workflows">
+        Workflows
+      </Link>,
+      <Link
+        href="/workflows/[id]"
+        as={`/workflows/${continuation.submissionId}`}
+        key={continuation.submissionId}
+      >
+        {continuation.submissionId}
+      </Link>,
+      <Link
+        href={{
+          pathname: "/continuations",
+          query: {
+            submissionId: continuation.submissionId
+          }
+        }}
+        key="continuations"
+      >
+        Continuations
+      </Link>,
+      continuation.id
+    ]
+
+    let menuItems = []
+    if (continuation.status === "OPEN") {
+      menuItems.push(
+        <li key="cancel" onClick={() => setCancelModalOpen(true)}>
+          Cancel
+        </li>
+      )
+    }
+    if (menuItems.length > 0) {
+      menu = <ul>{menuItems}</ul>
+    }
+
+    let progress = {
+      status: continuation.status
+    }
+
+    continuationMetadata = (
+      <>
+        <div className="detail-header">
+          <div className="left-two-columns">
+            <div className="detail-header-left">
+              <DefinitionList>
+                <DefinitionListItem title="Start time">
+                  {continuation.startTime ? (
+                    formatDate(continuation.startTime)
+                  ) : (
+                    <>&ndash;</>
+                  )}
+                </DefinitionListItem>
+                <DefinitionListItem title="End time">
+                  {continuation.endTime ? (
+                    formatDate(continuation.endTime)
+                  ) : (
+                    <>&ndash;</>
+                  )}
+                </DefinitionListItem>
+                <DefinitionListItem title="Time elapsed">
+                  {continuation.startTime && continuation.endTime ? (
+                    formatDurationTitle(
+                      continuation.startTime,
+                      continuation.endTime
+                    )
+                  ) : continuation.startTime ? (
+                    <LiveDuration startTime={continuation.startTime} />
+                  ) : (
+                    <>&ndash;</>
+                  )}
+                </DefinitionListItem>
+              </DefinitionList>
+            </div>
+          </div>
+          <div className="detail-header-right">
+            <ListItemProgressBox progress={progress} />
+          </div>
+        </div>
+        <style jsx>{styles}</style>
+      </>
+    )
+
+    continuationInputs = (
+      <ParameterValues
+        title="Inputs"
+        parameters={Object.fromEntries(
+          continuation.inputs.map(input => [
+            input.id,
+            Array.isArray(input.value) ? input.value : [input.value]
+          ])
+        )}
+        isEditable={false}
+      />
+    )
+
+    continuationOutputs = (
+      <ParameterValues
+        title="Outputs"
+        parameters={results}
+        isEditable={continuation.status === "OPEN"}
+        updateUrl={`${process.env.baseUrl}/continuations/${continuation.id}`}
+        onChange={setResults}
+      />
+    )
+  }
+
+  let menus = []
+  if (menu !== undefined) {
+    menus.push({
+      title: "Actions",
+      menu
+    })
+  }
+
   return (
-    <ContinuationContext.Provider allowAdd={false} pageSize={1}>
-      <ContinuationDetails id={id} />
-    </ContinuationContext.Provider>
+    // <ContinuationContext.Provider allowAdd={false} pageSize={1}>
+      <DetailPage
+        breadcrumbs={breadcrumbs}
+        title={title}
+        menus={menus}
+      >
+        {continuationMetadata || error}
+        {continuationInputs}
+        {continuationOutputs}
+        {continuation?.status === "OPEN" && (
+          <button
+            data-continuation-submit
+            className="btn primary"
+            disabled={submitPending}
+            onClick={() => setConfirmModalOpen(true)}
+          >
+            Submit
+          </button>
+        )}
+
+        <CancelModal
+          isOpen={cancelModalOpen}
+          contentLabel="Cancel modal"
+          onRequestClose={() => setCancelModalOpen(false)}
+          title="Cancel continuation"
+          onConfirm={onDoCancel}
+          onDeny={() => setCancelModalOpen(false)}
+        >
+          <p>Are you sure you want to cancel this continuation?</p>
+        </CancelModal>
+
+        <Modal
+          isOpen={confirmModalOpen}
+          contentLabel="Confirm modal"
+          onRequestClose={() => setConfirmModalOpen(false)}
+          title="Submit continuation"
+          onConfirm={onSubmit}
+          onDeny={() => setConfirmModalOpen(false)}
+        >
+          <p>
+            Are you sure you want to submit this continuation? Workflow execution
+            will continue with the provided output values.
+          </p>
+          <ModalButtons>
+            <button className="btn" onClick={() => setConfirmModalOpen(false)}>
+              Cancel
+            </button>
+            <button className="btn btn-primary" onClick={onSubmit}>
+              Submit
+            </button>
+          </ModalButtons>
+        </Modal>
+      </DetailPage>
+    // </ContinuationContext.Provider>
   )
 }
 
