@@ -194,6 +194,24 @@ const ListItemProgressBox = ({ progress, deleted = false }) => {
       )
       break
 
+    case "OPEN":
+      defaultTitle = "Open"
+      icon = (
+        <PauseCircle
+          className={classNames("feather", "open", resolvedStyles.className)}
+        />
+      )
+      break
+
+    case "PROCESSED":
+      defaultTitle = "Processed"
+      icon = (
+        <CheckCircle
+          className={classNames("feather", "processed", "success", resolvedStyles.className)}
+        />
+      )
+      break
+
     default:
       defaultTitle = "Error"
       icon = (

@@ -80,6 +80,16 @@ const ListItem = ({
     )
   }
 
+  if (!defaultSubtitle && startTime) {
+    let agoTitle = formatDate(startTime)
+    defaultSubtitle = (
+      <>
+        Created{" "}
+        <Ago date={startTime} formatter={formatterToNow} title={agoTitle} />
+      </>
+    )
+  }
+
   let titleLink
   if (!deleted) {
     titleLink = (

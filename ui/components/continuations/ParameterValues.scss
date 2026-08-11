@@ -1,0 +1,67 @@
+@import "css/variables";
+
+.parameter-values {
+  h2 {
+    margin-bottom: $spacer;
+  }
+  form {
+    border-top: 1px solid var(--border-color);
+  }
+}
+
+.value-item {
+  display: flex;
+  padding-top: $spacer * 2;
+
+  .value-item-left {
+    width: 30%;
+    border-right: 1px solid var(--border-color);
+    padding-right: $spacer;
+    margin-right: $spacer;
+    overflow-wrap: anywhere;
+  }
+
+  .value-item-right {
+    flex: 1;
+  }
+
+  input[type="text"] {
+    width: 100%;
+    margin-bottom: $spacer;
+  }
+
+  @media (max-width: $md) {
+    flex-direction: column;
+
+    .value-item-left {
+      width: 100%;
+      border: none;
+    }
+
+    .value-item-right {
+      width: 100%;
+      margin-top: $spacer;
+    }
+  }
+}
+
+.unsaved-indicator {
+  margin-left: $spacer / 2;
+
+  @keyframes spin {
+    100% {
+        transform: rotate(360deg);
+    }
+  }
+
+  .spinner {
+    display: inline-flex;
+    align-items: center;
+    vertical-align: middle;
+    animation: spin 1s linear infinite;
+    svg {
+      width: 100%;
+      height: 100%;
+    }
+  }
+}
