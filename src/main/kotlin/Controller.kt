@@ -358,9 +358,10 @@ class Controller(private val disablePeriodicLookupForSubmissions: Boolean = fals
           emptyList<ProcessChain>() to continuations
         } else {
           val rawPcs = generator.generate(results, executedExecutableIds)
-          val continuations = generator.getContinuations()
-          val pcs = applyPlugins(rawPcs, submission.workflow)
-          if (processChains.isEmpty() && pcs.isEmpty() && continuations.isEmpty()) {
+          val newContinuations = generator.getContinuations()
+          val newProcessChains = applyPlugins(rawPcs, submission.workflow)
+          if (processChains.isEmpty() && continuations.isEmpty() && newProcessChains.isEmpty() &&
+              newContinuations.isEmpty()) {
             break
           }
 
@@ -370,8 +371,8 @@ class Controller(private val disablePeriodicLookupForSubmissions: Boolean = fals
                 .enable(SerializationFeature.INDENT_OUTPUT)
             val lines = mutableListOf<String>()
             var i = 0
-            while (lines.size < 100 && i < pcs.size) {
-              val serializedProcessChain = mapper.writeValueAsString(pcs[i])
+            while (lines.size < 100 && i < newProcessChains.size) {
+              val serializedProcessChain = mapper.writeValueAsString(newProcessChains[i])
               lines.addAll(serializedProcessChain.lineSequence().take(101).toList())
               ++i
             }
@@ -384,13 +385,13 @@ class Controller(private val disablePeriodicLookupForSubmissions: Boolean = fals
           }
 
           // store process chains in submission registry
-          if (pcs.isNotEmpty()) {
-            submissionRegistry.addProcessChains(pcs, submission.id)
+          if (newProcessChains.isNotEmpty()) {
+            submissionRegistry.addProcessChains(newProcessChains, submission.id)
           }
 
           // store continuations in submission registry
-          if (continuations.isNotEmpty()) {
-            submissionRegistry.addContinuations(continuations, submission.id)
+          if (newContinuations.isNotEmpty()) {
+            submissionRegistry.addContinuations(newContinuations, submission.id)
           }
 
           // store the generator's state so we are able to resume the
@@ -398,7 +399,7 @@ class Controller(private val disablePeriodicLookupForSubmissions: Boolean = fals
           submissionRegistry.setSubmissionExecutionState(submission.id,
               generator.persistState())
 
-          pcs to continuations
+          newProcessChains to newContinuations
         }
 
         newProcessChains.associateByTo(processChains) { it.id }

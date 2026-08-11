@@ -54,6 +54,7 @@ import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInfo
 import org.junit.jupiter.api.extension.ExtendWith
+import kotlin.to
 
 /**
  * Tests for the [Controller]
@@ -806,6 +807,191 @@ class ControllerTest {
         assertThat(continuationLookupCalls)
             .withFailMessage("Continuation was never polled")
             .isGreaterThanOrEqualTo(2)
+      }
+      ctx.completeNow()
+    }
+
+    // execute submissions
+    coEvery { submissionRegistry.fetchNextSubmission(Status.ACCEPTED, Status.RUNNING) } answers {
+      if (acceptedSubmissions.isEmpty()) null else acceptedSubmissions.removeAt(0)
+    }
+
+    vertx.eventBus().publish(AddressConstants.CONTROLLER_LOOKUP_NOW, null)
+  }
+
+  /**
+   * Runs a workflow with three suspend actions that become available at the same
+   * time. Only one continuation result is used by a later copy service. The
+   * workflow must not end if there are no process chains left. It has to wait for
+   * the last continuation.
+   * @param vertx the Vert.x instance
+   * @param ctx the test context
+   */
+  @Test
+  fun submissionDoesNotEndIfUnusedContinuationsRemain(vertx: Vertx,
+      ctx: VertxTestContext) {
+    val workflow = readWorkflow("suspendThreeContinuations")
+    val submission = Submission(workflow = workflow)
+    val acceptedSubmissions = mutableListOf(submission)
+
+    // The generated IDs for the process chains.
+    var firstProcessChainId: String? = null
+    var secondProcessChainId: String? = null
+
+    // The generated IDs for the continuations.
+    // They are needed to identify the continuations in getContinuationStatusAndResultsIfFinished
+    var usedContinuationId: String? = null
+    var unusedContinuationId1: String? = null
+    var unusedContinuationId2: String? = null
+
+    // Counts how many process chain batches were already added.
+    // Ensures that all process chains are added in the end.
+    var processChainBatch = 0
+
+    // Flags if the corresponding continuation has already been answered.
+    // This is needed to ensure intended order of answering.
+    var usedContinuationAnswered = false
+    var unusedContinuation1Answered = false
+    var unusedContinuation2Answered = false
+
+    // Simulate a delay in answering the continuations.
+    val delayCounter = arrayOf(0, 0, 0)
+
+    // mock metadata registry
+    coEvery { metadataRegistry.findServices() } returns services
+
+    // mock submission registry
+    coEvery { submissionRegistry.getSubmissionStatus(submission.id) } returns Status.RUNNING
+    coEvery { submissionRegistry.getSubmissionExecutionState(submission.id) } returns null
+    coEvery { submissionRegistry.setSubmissionExecutionState(submission.id, any()) } just Runs
+    coEvery { submissionRegistry.setSubmissionStartTime(submission.id, any()) } just Runs
+    coEvery { submissionRegistry.setSubmissionResults(submission.id, any()) } just Runs
+    coEvery { submissionRegistry.setSubmissionErrorMessage(any(), any()) } just Runs
+    coEvery { submissionRegistry.setSubmissionStatus(submission.id, Status.RUNNING) } just Runs
+    coEvery { submissionRegistry.setSubmissionStatus(submission.id, Status.SUCCESS) } just Runs
+    coEvery { submissionRegistry.setSubmissionStatus(submission.id, Status.ERROR) } answers {
+      ctx.failNow(NoStackTraceThrowable("Submission failed unexpectedly"))
+    }
+
+    // Make sure all three continuations are added
+    // Remember their IDs to answer getContinuationStatusAndResultsIfFinished in correct order
+    val continuationsSlot = slot<Collection<Continuation>>()
+    coEvery { submissionRegistry.addContinuations(capture(continuationsSlot), submission.id) } answers {
+      ctx.verify {
+        assertThat(continuationsSlot.captured).hasSize(3)
+        assertThat(continuationsSlot.captured.map { it.suspendActionId })
+            .containsExactlyInAnyOrder("used_suspend", "unused_suspend1", "unused_suspend2")
+      }
+
+      // Remember the IDs of the continuations for later use
+      usedContinuationId = continuationsSlot.captured
+          .first { it.suspendActionId == "used_suspend" }.id
+      unusedContinuationId1 = continuationsSlot.captured
+          .first { it.suspendActionId == "unused_suspend1" }.id
+      unusedContinuationId2 = continuationsSlot.captured
+          .first { it.suspendActionId == "unused_suspend2" }.id
+    }
+
+    // Make sure the process chains are added and remember their IDs
+    // This is needed to answer getProcessChainStatusAndResultsIfFinished in correct order
+    val processChainsSlot = slot<List<ProcessChain>>()
+    coEvery { submissionRegistry.addProcessChains(capture(processChainsSlot), submission.id) } answers {
+      processChainBatch++
+
+      val pc = processChainsSlot.captured.first()
+      if (processChainBatch == 1) {
+        firstProcessChainId = pc.id
+      } else if (processChainBatch == 2) {
+        secondProcessChainId = pc.id
+      } else {
+        ctx.failNow(NoStackTraceThrowable("Unexpected process chain batch number: $processChainBatch"))
+      }
+    }
+
+    // All process chains are mocked to the expected results.
+    // This makes sure, that the controller can just continue.
+    coEvery { submissionRegistry.getProcessChainStatusAndResultsIfFinished(any()) } answers {
+      val ids = firstArg<Collection<String>>()
+      val firstPcId = firstProcessChainId
+      val secondPcId = secondProcessChainId
+      when {
+        firstPcId != null && ids.contains(firstPcId) -> mapOf(
+            firstPcId to (ProcessChainStatus.SUCCESS to mapOf(
+                "output_file1" to listOf("/some/path/to/file.txt")
+            ))
+        )
+        secondPcId != null && ids.contains(secondPcId) -> mapOf(
+            secondPcId to (ProcessChainStatus.SUCCESS to mapOf(
+                "output_file3" to listOf("/some/path/to/other_file.txt")
+            ))
+        )
+        else -> emptyMap()
+      }
+    }
+
+    // Ensure correct order of answering continuations: first the unused one, then the used one and
+    // finally the second unused one.
+    // We want to make sure that the controller does not end the submission if no new process chains
+    // can be created after an answer (like for the unused one).
+    // At the same time, the controller must wait until the last continuation (unused two) is answered
+    // before ending the submission.
+    coEvery { submissionRegistry.getContinuationStatusAndResultsIfFinished(any()) } answers {
+      val ids = firstArg<Collection<String>>().toSet()
+      val usedId = usedContinuationId
+      val unusedId1 = unusedContinuationId1
+      val unusedId2 = unusedContinuationId2
+      if (usedId == null || unusedId1 == null || unusedId2 == null) {
+        emptyMap() // We have not yet added the continuations, so we cannot answer anything yet
+      } else {
+        val response = mutableMapOf<String, Pair<Continuation.Status, Map<String, List<String>>>>()
+
+        // Only if the used continuation is already answered, the unused continuation 2 is answered.
+        // This is the last answer.
+        if (usedContinuationAnswered && ids.contains(unusedId2)) {
+          delayCounter[2]++
+          if (delayCounter[2] > 5) {
+            unusedContinuation2Answered = true
+            response[unusedId2] = Continuation.Status.PROCESSED to mapOf(
+              "unused_file2" to listOf("/some/path/to/unused_file2.txt")
+            )
+          }
+        }
+
+        // Only if the unused continuation 1 is already answered, the used continuation is answered.
+        // This is the second answer.
+        if (unusedContinuation1Answered && ids.contains(usedId)) {
+          delayCounter[1]++
+          if (delayCounter[1] > 5) {
+            usedContinuationAnswered = true
+            response[usedId] = Continuation.Status.PROCESSED to mapOf(
+              "output_file2" to listOf("/some/path/to/used_file.txt")
+            )
+          }
+        }
+
+        // The unused continuation 1 is answered directly.
+        // This is the first answer.
+        if (ids.contains(usedId)) {
+          delayCounter[0]++
+          if (delayCounter[0] > 5) {
+            unusedContinuation1Answered = true
+            response[unusedId1] = Continuation.Status.PROCESSED to mapOf(
+              "unused_file1" to listOf("/some/path/to/unused_file1.txt")
+            )
+          }
+        }
+        response
+      }
+    }
+
+    // The Controller wants to finish the submission.
+    // Make sure all continuations are answered
+    coEvery { submissionRegistry.setSubmissionEndTime(submission.id, any()) } answers {
+      ctx.verify {
+        assertThat(processChainBatch).isEqualTo(2)
+        assertThat(unusedContinuation1Answered).isTrue
+        assertThat(unusedContinuation2Answered).isTrue
+        assertThat(usedContinuationAnswered).isTrue
       }
       ctx.completeNow()
     }
