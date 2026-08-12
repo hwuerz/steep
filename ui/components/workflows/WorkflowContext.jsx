@@ -10,7 +10,10 @@ import {
   SUBMISSIONS_DELETED,
   PROCESS_CHAINS_ADDED_SIZE,
   PROCESS_CHAIN_STATUS_CHANGED,
-  PROCESS_CHAIN_ALL_STATUS_CHANGED
+  PROCESS_CHAIN_ALL_STATUS_CHANGED,
+  CONTINUATIONS_ADDED_SIZE,
+  CONTINUATION_STATUS_CHANGED,
+  CONTINUATION_ALL_STATUS_CHANGED
 } from "../lib/EventBusMessages"
 
 function initWorkflow(w) {
@@ -20,6 +23,10 @@ function initWorkflow(w) {
   w.cancelledProcessChains = w.cancelledProcessChains || 0
   w.failedProcessChains = w.failedProcessChains || 0
   w.totalProcessChains = w.totalProcessChains || 0
+  w.openContinuations = w.openContinuations || 0
+  w.processedContinuations = w.processedContinuations || 0
+  w.cancelledContinuations = w.cancelledContinuations || 0
+  w.totalContinuations = w.totalContinuations || 0
 }
 
 const ADD_MESSAGES = {
@@ -124,6 +131,50 @@ const UPDATE_MESSAGES = {
     id: body.submissionId,
     newStatus: body.newStatus,
     currentStatus: body.currentStatus
+  }),
+  [CONTINUATIONS_ADDED_SIZE]: body => {
+    return {
+      id: body.submissionId,
+      totalContinuations: body.continuationsSize,
+      // Continuations are always added with status OPEN
+      openContinuations: body.continuationsSize
+    }
+  },
+  [CONTINUATION_STATUS_CHANGED]: body => {
+    let status = body.status
+    let previousStatus = body.previousStatus
+
+    let workflow = {
+      id: body.submissionId,
+      openContinuations: 0,
+      processedContinuations: 0,
+      cancelledContinuations: 0
+    }
+
+    if (previousStatus !== status) {
+      if (previousStatus === "OPEN") {
+        workflow.openContinuations--
+      } else if (previousStatus === "PROCESSED") {
+        workflow.processedContinuations--
+      } else if (previousStatus === "CANCELLED") {
+        workflow.cancelledContinuations--
+      }
+
+      if (status === "OPEN") {
+        workflow.openContinuations++
+      } else if (status === "PROCESSED") {
+        workflow.processedContinuations++
+      } else if (status === "CANCELLED") {
+        workflow.cancelledContinuations++
+      }
+    }
+
+    return workflow
+  },
+  [CONTINUATION_ALL_STATUS_CHANGED]: body => ({
+    id: body.submissionId,
+    newContinuationStatus: body.newStatus,
+    currentContinuationStatus: body.currentStatus
   })
 }
 
@@ -136,9 +187,17 @@ function reducer(state, { action, items }, next) {
       items[0].pausedProcessChains !== undefined ||
       items[0].cancelledProcessChains !== undefined ||
       items[0].failedProcessChains !== undefined ||
-      items[0].succeededProcessChains !== undefined)
+      items[0].succeededProcessChains !== undefined ||
+      items[0].totalContinuations !== undefined ||
+      items[0].openContinuations !== undefined ||
+      items[0].processedContinuations !== undefined ||
+      items[0].cancelledContinuations !== undefined)
   ) {
-    // add process chains or change status of process chains
+    // handles the cases:
+    // - add process chains
+    // - change status of process chains
+    // - add continuations
+    // - change status of continuations
     if (state.items !== undefined) {
       for (let item of items) {
         let i = state.items.findIndex(w => w.id === item.id)
@@ -181,6 +240,30 @@ function reducer(state, { action, items }, next) {
           newItem.succeededProcessChains = Math.max(
             0,
             newItem.succeededProcessChains + item.succeededProcessChains
+          )
+        }
+        if (item.totalContinuations !== undefined) {
+          newItem.totalContinuations = Math.max(
+            0,
+            newItem.totalContinuations + item.totalContinuations
+          )
+        }
+        if (item.openContinuations !== undefined) {
+          newItem.openContinuations = Math.max(
+            0,
+            newItem.openContinuations + item.openContinuations
+          )
+        }
+        if (item.processedContinuations !== undefined) {
+          newItem.processedContinuations = Math.max(
+            0,
+            newItem.processedContinuations + item.processedContinuations
+          )
+        }
+        if (item.cancelledContinuations !== undefined) {
+          newItem.cancelledContinuations = Math.max(
+            0,
+            newItem.cancelledContinuations + item.cancelledContinuations
           )
         }
 
@@ -247,6 +330,53 @@ function reducer(state, { action, items }, next) {
           newItem.failedProcessChains += n
         } else if (item.newStatus === "SUCCESS") {
           newItem.succeededProcessChains += n
+        }
+
+        let newItems = [...state.items]
+        newItems[i] = newItem
+        state = { ...state, items: newItems }
+      }
+    }
+    return state
+  }
+
+  if (
+    action === "update" &&
+    items.length > 0 &&
+    items[0].currentContinuationStatus !== undefined &&
+    items[0].newContinuationStatus !== undefined
+  ) {
+    // change status of all continuations
+    if (state.items !== undefined) {
+      for (let item of items) {
+        if (item.currentContinuationStatus === item.newContinuationStatus) {
+          continue
+        }
+
+        let i = state.items.findIndex(w => w.id === item.id)
+        if (i < 0) {
+          continue
+        }
+
+        let newItem = { ...state.items[i] }
+        let n = 0
+        if (item.currentContinuationStatus === "OPEN") {
+          n = newItem.openContinuations
+          newItem.openContinuations = 0
+        } else if (item.currentContinuationStatus === "PROCESSED") {
+          n = newItem.processedContinuations
+          newItem.processedContinuations = 0
+        } else if (item.currentContinuationStatus === "CANCELLED") {
+          n = newItem.cancelledContinuations
+          newItem.cancelledContinuations = 0
+        }
+
+        if (item.newContinuationStatus === "OPEN") {
+          newItem.openContinuations += n
+        } else if (item.newContinuationStatus === "PROCESSED") {
+          newItem.processedContinuations += n
+        } else if (item.newContinuationStatus === "CANCELLED") {
+          newItem.cancelledContinuations += n
         }
 
         let newItems = [...state.items]

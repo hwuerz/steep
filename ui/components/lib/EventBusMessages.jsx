@@ -31,6 +31,15 @@ module.exports = {
   PROCESS_CHAIN_PROGRESS_CHANGED:
     "steep.submissionRegistry.processChainProgressChanged",
 
+  CONTINUATIONS_ADDED: "steep.submissionRegistry.continuationsAdded",
+  CONTINUATIONS_ADDED_SIZE: "steep.submissionRegistry.continuationsAddedSize",
+  CONTINUATION_STATUS_CHANGED:
+    "steep.submissionRegistry.continuationStatusChanged",
+  CONTINUATION_ALL_STATUS_CHANGED:
+    "steep.submissionRegistry.continuationAllStatusChanged",
+  CONTINUATION_RESULTS_CHANGED:
+    "steep.submissionRegistry.continuationResultsChanged",
+
   CLUSTER_NODE_LEFT: "steep.cluster.nodeLeft",
 
   AGENT_ADDRESS_PREFIX: "steep.remoteAgentRegistry.agent.",

@@ -71,7 +71,10 @@ function WorkflowDetails({ id }) {
   let priority
   let deleted
   let status
-  let continuationProgress
+  let openContinuations
+  let processedContinuations
+  let cancelledContinuations
+  let totalContinuations
   if (workflows.items !== undefined && workflows.items.length > 0) {
     let w = workflows.items[0]
     id = w.id
@@ -82,14 +85,10 @@ function WorkflowDetails({ id }) {
     workflowSource = submissionToSource(w)
     deleted = !!w.deleted
     status = w.status
-    if (w.totalContinuations > 0) {
-      continuationProgress = {
-        open: w.openContinuations,
-        processed: w.processedContinuations,
-        cancelled: w.cancelledContinuations,
-        total: w.totalContinuations
-      }
-    }
+    openContinuations = w.openContinuations
+    processedContinuations = w.processedContinuations
+    cancelledContinuations = w.cancelledContinuations
+    totalContinuations = w.totalContinuations
   }
 
   const codeBox = useMemo(
@@ -170,14 +169,14 @@ function WorkflowDetails({ id }) {
             <DefinitionListItem title="Required capabilities">
               {reqcap}
             </DefinitionListItem>
-            {continuationProgress && <DefinitionListItem title="Continuations">
+            {totalContinuations > 0 && <DefinitionListItem title="Continuations">
               <Link href={{
                 pathname: "/continuations",
                 query: {
                   submissionId: id
                 }
               }}>
-                {continuationProgress.processed + continuationProgress.cancelled} of {continuationProgress.total} completed
+                {processedContinuations + cancelledContinuations} of {totalContinuations} completed
               </Link>
             </DefinitionListItem>}
           </DefinitionList>
@@ -185,7 +184,17 @@ function WorkflowDetails({ id }) {
         <style jsx>{styles}</style>
       </div>
     )
-  }, [id, startTime, endTime, requiredCapabilities, priority, status])
+  }, [
+    id,
+    startTime,
+    endTime,
+    requiredCapabilities,
+    priority,
+    status,
+    processedContinuations,
+    cancelledContinuations,
+    totalContinuations
+  ])
 
   let title
   let workflow
@@ -210,6 +219,16 @@ function WorkflowDetails({ id }) {
     }
 
     let progress = workflowToProgress(w)
+
+    let continuationProgress
+    if (totalContinuations > 0) {
+        continuationProgress = {
+        open: openContinuations,
+        processed: processedContinuations,
+        cancelled: cancelledContinuations,
+        total: totalContinuations
+        }
+    }
 
     workflow = (
       <>

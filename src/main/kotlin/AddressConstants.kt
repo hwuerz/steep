@@ -209,6 +209,32 @@ object AddressConstants {
   const val PROCESSCHAIN_PROGRESS_CHANGED = "steep.submissionRegistry.processChainProgressChanged"
 
   /**
+   * Will be published when a continuation has been added to the registry
+   */
+  const val CONTINUATIONS_ADDED = "steep.submissionRegistry.continuationsAdded"
+
+  /**
+   * Similar to [CONTINUATIONS_ADDED] but only the number of the added continuations
+   * will be transferred and not the continuations themselves
+   */
+  const val CONTINUATIONS_ADDED_SIZE = "steep.submissionRegistry.continuationsAddedSize"
+
+  /**
+   * Will be published when a continuation's status has changed
+   */
+  const val CONTINUATION_STATUS_CHANGED = "steep.submissionRegistry.continuationStatusChanged"
+
+  /**
+   * Will be published when the status of multiple continuations has changed at once
+   */
+  const val CONTINUATION_ALL_STATUS_CHANGED = "steep.submissionRegistry.continuationAllStatusChanged"
+
+  /**
+   * Will be published when a continuation's results have changed
+   */
+  const val CONTINUATION_RESULTS_CHANGED = "steep.submissionRegistry.continuationResultsChanged"
+
+  /**
    * Will be published when a VM has been added to the registry
    */
   const val VM_ADDED = "steep.vmRegistry.vmAdded"

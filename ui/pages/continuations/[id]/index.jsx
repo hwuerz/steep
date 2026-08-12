@@ -11,33 +11,24 @@ import LiveDuration from "../../../components/LiveDuration"
 import Modal from "../../../components/Modal"
 import ModalButtons from "../../../components/ModalButtons"
 import ContinuationContext from "../../../components/continuations/ContinuationContext"
-import EventBusContext from "../../../components/lib/EventBusContext"
 import { formatDate, formatDurationTitle } from "../../../components/lib/date-time-utils"
 import fetcher from "../../../components/lib/json-fetcher"
 import ParameterValues from "../../../components/continuations/ParameterValues"
 import styles from "./index.scss"
 
-const Continuation = () => {
-  const router = useRouter()
-  const { id } = router.query
-
+const ContinuationDetails = ({ id }) => {
   const continuations = useContext(ContinuationContext.Items)
   const updateContinuations = useContext(ContinuationContext.UpdateItems)
-  const eventBus = useContext(EventBusContext)
   const [error, setError] = useState()
   const [cancelModalOpen, setCancelModalOpen] = useState(false)
   const [results, setResults] = useState({})
   const [confirmModalOpen, setConfirmModalOpen] = useState(false)
   const [submitPending, setSubmitPending] = useState(false)
 
-  const [continuation, setContinuation] = useState(undefined)
-
-//   let continuation
-//   if (continuations.items !== undefined && continuations.items.length > 0) {
-//     continuation = continuations.items[0]
-//   } else {
-//     continuation = undefined
-//   }
+  let continuation
+  if (continuations.items !== undefined && continuations.items.length > 0) {
+    continuation = continuations.items[0]
+  }
 
   useEffect(() => {
     if (!continuation) {
@@ -59,11 +50,7 @@ const Continuation = () => {
     }
 
     fetcher(`${process.env.baseUrl}/continuations/${id}`)
-    //   .then(continuation => updateContinuations({ action: "set", items: [continuation] }))
-      .then(con => {
-        console.log("Fetched continuation:", con)
-        setContinuation(con)
-      })
+      .then(continuation => updateContinuations({ action: "set", items: [continuation] }))
       .catch(err => {
         console.log(err)
         setError(<Alert error>Could not load continuation</Alert>)
@@ -95,8 +82,7 @@ const Continuation = () => {
       method: "PUT",
       body: JSON.stringify({ results: cleanedResults, status: "PROCESSED" })
     }).then(updatedContinuation => {
-    //   updateContinuations({ action: "set", items: [updatedContinuation] })
-      setContinuation(updatedContinuation)
+      updateContinuations({ action: "set", items: [updatedContinuation] })
       setConfirmModalOpen(false)
     }).catch(error => {
       console.error(error)
@@ -231,60 +217,69 @@ const Continuation = () => {
   }
 
   return (
-    // <ContinuationContext.Provider allowAdd={false} pageSize={1}>
-      <DetailPage
-        breadcrumbs={breadcrumbs}
-        title={title}
-        menus={menus}
+    <DetailPage
+      breadcrumbs={breadcrumbs}
+      title={title}
+      menus={menus}
+    >
+      {continuationMetadata || error}
+      {continuationInputs}
+      {continuationOutputs}
+      {continuation?.status === "OPEN" && (
+        <button
+          data-continuation-submit
+          className="btn primary"
+          disabled={submitPending}
+          onClick={() => setConfirmModalOpen(true)}
+        >
+          Submit
+        </button>
+      )}
+
+      <CancelModal
+        isOpen={cancelModalOpen}
+        contentLabel="Cancel modal"
+        onRequestClose={() => setCancelModalOpen(false)}
+        title="Cancel continuation"
+        onConfirm={onDoCancel}
+        onDeny={() => setCancelModalOpen(false)}
       >
-        {continuationMetadata || error}
-        {continuationInputs}
-        {continuationOutputs}
-        {continuation?.status === "OPEN" && (
-          <button
-            data-continuation-submit
-            className="btn primary"
-            disabled={submitPending}
-            onClick={() => setConfirmModalOpen(true)}
-          >
+        <p>Are you sure you want to cancel this continuation?</p>
+      </CancelModal>
+
+      <Modal
+        isOpen={confirmModalOpen}
+        contentLabel="Confirm modal"
+        onRequestClose={() => setConfirmModalOpen(false)}
+        title="Submit continuation"
+        onConfirm={onSubmit}
+        onDeny={() => setConfirmModalOpen(false)}
+      >
+        <p>
+          Are you sure you want to submit this continuation? Workflow execution
+          will continue with the provided output values.
+        </p>
+        <ModalButtons>
+          <button className="btn" onClick={() => setConfirmModalOpen(false)}>
+            Cancel
+          </button>
+          <button className="btn btn-primary" onClick={onSubmit}>
             Submit
           </button>
-        )}
+        </ModalButtons>
+      </Modal>
+    </DetailPage>
+  )
+}
 
-        <CancelModal
-          isOpen={cancelModalOpen}
-          contentLabel="Cancel modal"
-          onRequestClose={() => setCancelModalOpen(false)}
-          title="Cancel continuation"
-          onConfirm={onDoCancel}
-          onDeny={() => setCancelModalOpen(false)}
-        >
-          <p>Are you sure you want to cancel this continuation?</p>
-        </CancelModal>
+const Continuation = () => {
+  const router = useRouter()
+  const { id } = router.query
 
-        <Modal
-          isOpen={confirmModalOpen}
-          contentLabel="Confirm modal"
-          onRequestClose={() => setConfirmModalOpen(false)}
-          title="Submit continuation"
-          onConfirm={onSubmit}
-          onDeny={() => setConfirmModalOpen(false)}
-        >
-          <p>
-            Are you sure you want to submit this continuation? Workflow execution
-            will continue with the provided output values.
-          </p>
-          <ModalButtons>
-            <button className="btn" onClick={() => setConfirmModalOpen(false)}>
-              Cancel
-            </button>
-            <button className="btn btn-primary" onClick={onSubmit}>
-              Submit
-            </button>
-          </ModalButtons>
-        </Modal>
-      </DetailPage>
-    // </ContinuationContext.Provider>
+  return (
+    <ContinuationContext.Provider allowAdd={false} pageSize={1}>
+      <ContinuationDetails id={id} />
+    </ContinuationContext.Provider>
   )
 }
 

@@ -1,4 +1,9 @@
 import AddressConstants.CLUSTER_NODE_LEFT
+import AddressConstants.CONTINUATIONS_ADDED
+import AddressConstants.CONTINUATIONS_ADDED_SIZE
+import AddressConstants.CONTINUATION_ALL_STATUS_CHANGED
+import AddressConstants.CONTINUATION_RESULTS_CHANGED
+import AddressConstants.CONTINUATION_STATUS_CHANGED
 import AddressConstants.CONTROLLER_LOOKUP_NOW
 import AddressConstants.LOCAL_AGENT_ADDRESS_PREFIX
 import AddressConstants.LOGS_PROCESSCHAINS_PREFIX
@@ -393,6 +398,16 @@ class HttpEndpoint : CoroutineVerticle() {
             .setAddress(PROCESSCHAIN_ALL_PRIORITY_CHANGED))
         .addOutboundPermitted(PermittedOptions()
             .setAddress(PROCESSCHAIN_PROGRESS_CHANGED))
+        .addOutboundPermitted(PermittedOptions()
+            .setAddress(CONTINUATIONS_ADDED))
+        .addOutboundPermitted(PermittedOptions()
+            .setAddress(CONTINUATIONS_ADDED_SIZE))
+        .addOutboundPermitted(PermittedOptions()
+            .setAddress(CONTINUATION_STATUS_CHANGED))
+        .addOutboundPermitted(PermittedOptions()
+            .setAddress(CONTINUATION_ALL_STATUS_CHANGED))
+        .addOutboundPermitted(PermittedOptions()
+            .setAddress(CONTINUATION_RESULTS_CHANGED))
         .addOutboundPermitted(PermittedOptions()
             .setAddress(CLUSTER_NODE_LEFT))
         .addOutboundPermitted(PermittedOptions()

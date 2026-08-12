@@ -7,6 +7,7 @@ import io.vertx.core.Vertx
 import io.vertx.kotlin.core.eventbus.deliveryOptionsOf
 import io.vertx.kotlin.core.json.jsonObjectOf
 import model.Submission
+import model.continuation.Continuation
 import model.processchain.ProcessChain
 import model.workflow.Workflow
 import java.time.Instant
@@ -240,6 +241,58 @@ class NotifyingSubmissionRegistry(private val delegate: SubmissionRegistry, priv
     vertx.eventBus().publish(AddressConstants.PROCESSCHAIN_RESULTS_CHANGED, jsonObjectOf(
         "processChainId" to processChainId,
         "results" to results
+    ))
+  }
+
+  override suspend fun addContinuations(continuations: Collection<Continuation>, submissionId: String) {
+    delegate.addContinuations(continuations, submissionId)
+    val options = deliveryOptionsOf(codecName = "lazyjsonobject")
+    vertx.eventBus().publish(AddressConstants.CONTINUATIONS_ADDED, {
+      jsonObjectOf(
+          "continuations" to continuations.map { c ->
+            JsonUtils.toJson(c)
+          },
+          "submissionId" to submissionId
+      )
+    }, options)
+
+    vertx.eventBus().publish(AddressConstants.CONTINUATIONS_ADDED_SIZE, {
+      jsonObjectOf(
+          "continuationsSize" to continuations.size,
+          "submissionId" to submissionId,
+      )
+    }, options)
+  }
+
+  override suspend fun setContinuationStatus(continuationId: String, status: Continuation.Status) {
+    val previous = delegate.findContinuationById(continuationId)?.status
+    delegate.setContinuationStatus(continuationId, status)
+    vertx.eventBus().publish(AddressConstants.CONTINUATION_STATUS_CHANGED, jsonObjectOf(
+        "continuationId" to continuationId,
+        "submissionId" to delegate.getContinuationSubmissionId(continuationId),
+        "status" to status.name,
+        "previousStatus" to previous?.name
+    ))
+  }
+
+  override suspend fun setAllContinuationsStatus(
+    submissionId: String,
+    currentStatus: Continuation.Status,
+    newStatus: Continuation.Status
+  ) {
+    delegate.setAllContinuationsStatus(submissionId, currentStatus, newStatus)
+    vertx.eventBus().publish(AddressConstants.CONTINUATION_ALL_STATUS_CHANGED, jsonObjectOf(
+      "submissionId" to submissionId,
+      "currentStatus" to currentStatus.name,
+      "newStatus" to newStatus.name
+    ))
+  }
+
+  override suspend fun setContinuationResults(continuationId: String, results: Map<String, List<Any>>?) {
+    delegate.setContinuationResults(continuationId, results)
+    vertx.eventBus().publish(AddressConstants.CONTINUATION_RESULTS_CHANGED, jsonObjectOf(
+      "continuationId" to continuationId,
+      "results" to results
     ))
   }
 }

@@ -1,13 +1,76 @@
 import makeListContext from "../lib/ListContext"
+import { produce } from "immer"
 
-// There are no continuation-specific EventBus messages yet, so this
-// context only relies on the REST API for loading and does not support
-// live updates (allowAdd = false, no add/update messages).
+import {
+    CONTINUATIONS_ADDED,
+    CONTINUATION_STATUS_CHANGED,
+    CONTINUATION_ALL_STATUS_CHANGED,
+    CONTINUATION_RESULTS_CHANGED
+} from "../lib/EventBusMessages"
+
+const ADD_MESSAGES = {
+  [CONTINUATIONS_ADDED]: body => {
+    for (let continuation of body.continuations) {
+      continuation.submissionId = body.submissionId
+    }
+    return body.continuations
+  }
+}
+
+const UPDATE_MESSAGES = {
+  [CONTINUATION_STATUS_CHANGED]: body => ({
+    id: body.continuationId,
+    status: body.status,
+    submissionId: body.submissionId
+  }),
+  [CONTINUATION_ALL_STATUS_CHANGED]: body => ({
+    currentStatus: body.currentStatus,
+    status: body.newStatus,
+    submissionId: body.submissionId
+  }),
+  [CONTINUATION_RESULTS_CHANGED]: body => ({
+    id: body.continuationId,
+    results: body.results
+  })
+}
+
+function reducer(state, { action, items }, next) {
+  if (action === "update" && items.length > 0 && state.items !== undefined) {
+    if (items[0].id === undefined && items[0].submissionId !== undefined) {
+      // update all continuations of a submission
+      return produce(state, draft => {
+        for (let item of items) {
+          for (let c of draft.items) {
+            if (c.submissionId === item.submissionId) {
+              if (
+                item.currentStatus !== undefined &&
+                c.status === item.currentStatus
+              ) {
+                c.status = item.status
+              }
+            }
+          }
+        }
+      })
+    }
+  }
+
+  return next(state, { action, items })
+}
+
 const ListContext = makeListContext()
 
-const Provider = props => (
-  <ListContext.Provider {...props} allowAdd={false} />
-)
+const Provider = props => {
+  let reducers = [...(props.reducers || []), reducer]
+  return (
+    <ListContext.Provider
+      {...props}
+      addMessages={ADD_MESSAGES}
+      updateMessages={UPDATE_MESSAGES}
+      reducers={reducers}
+    />
+  )
+}
 
 const ContinuationContext = {
   Items: ListContext.Items,
