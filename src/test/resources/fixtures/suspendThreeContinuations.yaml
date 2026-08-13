@@ -43,4 +43,3 @@ actions:
     outputs:
       - id: output_file
         var: output_file3
-

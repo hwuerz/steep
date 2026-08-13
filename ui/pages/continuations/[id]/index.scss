@@ -1,1 +1,9 @@
 @import "css/variables";
+
+button {
+  margin-top: $spacer;
+  
+  &:not(:last-child) {
+    margin-right: $spacer;
+  }
+}

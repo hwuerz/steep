@@ -23,7 +23,6 @@ const ContinuationDetails = ({ id }) => {
   const [cancelModalOpen, setCancelModalOpen] = useState(false)
   const [results, setResults] = useState({})
   const [confirmModalOpen, setConfirmModalOpen] = useState(false)
-  const [submitPending, setSubmitPending] = useState(false)
 
   let continuation
   if (continuations.items !== undefined && continuations.items.length > 0) {
@@ -69,7 +68,15 @@ const ContinuationDetails = ({ id }) => {
     })
   }
 
-  function onSubmit() {
+  /**
+   * Handler for saving the continuation results and optionally submitting the continuation.
+   * @param {boolean} submit Whether to submit the continuation when saving (setting
+   * the status to "PROCESSED").
+   */
+  function onDoSave(submit) {
+    setConfirmModalOpen(false)
+
+    // Remove empty entries
     const cleanedResults = Object.fromEntries(
       Object.entries(results).map(([key, values]) => [
         key,
@@ -77,17 +84,16 @@ const ContinuationDetails = ({ id }) => {
       ])
     )
 
-    setSubmitPending(true)
     fetcher(`${process.env.baseUrl}/continuations/${id}`, false, {
       method: "PUT",
-      body: JSON.stringify({ results: cleanedResults, status: "PROCESSED" })
+      body: JSON.stringify({
+        results: cleanedResults,
+        status: submit ? "PROCESSED" : undefined
+      })
     }).then(updatedContinuation => {
       updateContinuations({ action: "set", items: [updatedContinuation] })
-      setConfirmModalOpen(false)
     }).catch(error => {
       console.error(error)
-    }).finally(() => {
-      setSubmitPending(false)
     })
   }
 
@@ -180,7 +186,6 @@ const ContinuationDetails = ({ id }) => {
             <ListItemProgressBox progress={progress} />
           </div>
         </div>
-        <style jsx>{styles}</style>
       </>
     )
 
@@ -193,7 +198,7 @@ const ContinuationDetails = ({ id }) => {
             Array.isArray(input.value) ? input.value : [input.value]
           ])
         )}
-        isEditable={false}
+        readOnly={true}
       />
     )
 
@@ -201,9 +206,8 @@ const ContinuationDetails = ({ id }) => {
       <ParameterValues
         title="Outputs"
         parameters={results}
-        isEditable={continuation.status === "OPEN"}
-        updateUrl={`${process.env.baseUrl}/continuations/${continuation.id}`}
-        onChange={setResults}
+        setParameters={setResults}
+        readOnly={continuation.status !== "OPEN"}
       />
     )
   }
@@ -226,14 +230,20 @@ const ContinuationDetails = ({ id }) => {
       {continuationInputs}
       {continuationOutputs}
       {continuation?.status === "OPEN" && (
-        <button
-          data-continuation-submit
-          className="btn primary"
-          disabled={submitPending}
-          onClick={() => setConfirmModalOpen(true)}
-        >
-          Submit
-        </button>
+        <>
+          <button
+            className="btn primary"
+            onClick={() => setConfirmModalOpen(true)}
+          >
+            Save & Submit
+          </button>
+          <button
+            className="btn"
+            onClick={() => onDoSave(false)}
+          >
+            Save
+          </button>
+        </>
       )}
 
       <CancelModal
@@ -252,7 +262,7 @@ const ContinuationDetails = ({ id }) => {
         contentLabel="Confirm modal"
         onRequestClose={() => setConfirmModalOpen(false)}
         title="Submit continuation"
-        onConfirm={onSubmit}
+        onConfirm={() => onDoSave(true)}
         onDeny={() => setConfirmModalOpen(false)}
       >
         <p>
@@ -263,11 +273,12 @@ const ContinuationDetails = ({ id }) => {
           <button className="btn" onClick={() => setConfirmModalOpen(false)}>
             Cancel
           </button>
-          <button className="btn btn-primary" onClick={onSubmit}>
+          <button className="btn btn-primary" onClick={() => onDoSave(true)}>
             Submit
           </button>
         </ModalButtons>
       </Modal>
+      <style jsx>{styles}</style>
     </DetailPage>
   )
 }
